@@ -31,10 +31,9 @@ class TrajectoryGenerator:
     # ------------------------------------------------------------------
 
     def reset(self, traj_type=None):
-        """Sample a new trajectory. Call at the start of each episode."""
         self.t = 0.0
         ttype = traj_type or self.traj_type
-
+        self.traj_type = ttype        
         if ttype == "waypoint":
             self._init_waypoints()
         elif ttype == "lissajous":

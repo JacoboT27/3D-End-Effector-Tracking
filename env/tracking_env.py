@@ -82,6 +82,9 @@ class EETrackingEnv(gym.Env):
         # find EE body id (assumes XML has a body named "ee" or "hand")
         self._ee_body_id = self._find_ee_body()
 
+        self.control_freq = config["env"]["control_freq"]
+        self.n_substeps = max(round((1.0 / self.control_freq) / self.model.opt.timestep), 1)
+
     # ------------------------------------------------------------------
     # Gymnasium API
     # ------------------------------------------------------------------
@@ -89,6 +92,7 @@ class EETrackingEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         mujoco.mj_resetData(self.model, self.data)
+        mujoco.mj_forward(self.model, self.data)
 
         traj_type = "lissajous" if self.eval_mode else None
         self.trajectory.reset(traj_type=traj_type)
@@ -116,7 +120,8 @@ class EETrackingEnv(gym.Env):
             self.model.jnt_range[: self.n_joints, 1],
         )
         self.data.ctrl[:] = new_qpos
-        mujoco.mj_step(self.model, self.data)
+        for _ in range(self.n_substeps):
+            mujoco.mj_step(self.model, self.data)
 
         # advance trajectory
         target_pos, target_lin_vel, target_rot, target_ang_vel = self.trajectory.step()
