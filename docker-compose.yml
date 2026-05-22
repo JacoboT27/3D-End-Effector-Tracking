@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  train:
+    build: .
+    volumes:
+      - ./models:/workspace/models
+      - ./logs:/workspace/logs
+    command: python agent/train.py --config configs/default.yaml
+    environment:
+      - MUJOCO_GL=osmesa   # headless rendering during training
+
+  evaluate:
+    build: .
+    volumes:
+      - ./models:/workspace/models
+      - ./logs:/workspace/logs
+    command: python agent/evaluate.py --config configs/default.yaml --model models/best/best_model
+    environment:
+      - MUJOCO_GL=osmesa
+    # For display on Linux, uncomment:
+    # environment:
+    #   - DISPLAY=${DISPLAY}
+    #   - MUJOCO_GL=glfw
+    # volumes:
+    #   - /tmp/.X11-unix:/tmp/.X11-unix

@@ -1,0 +1,41 @@
+env:
+  robot: "franka"                  # franka | ur5
+  control_freq: 20                 # Hz
+  episode_steps: 500
+  max_delta_q: 0.05                # radians per step, action clip
+  track_orientation: true
+
+noise:
+  ee_pos_std: 0.005                # meters
+  ee_ori_std: 0.01                 # radians (applied to 6D repr)
+  joint_pos_std: 0.005             # radians
+
+trajectory:
+  train_type: "waypoint"           # random waypoints during training
+  eval_type: "lissajous"           # lissajous during evaluation
+  n_waypoints: 6                   # for random waypoint mode
+  interp_duration: 2.0             # seconds per segment
+  workspace_center: [0.4, 0.0, 0.4]
+  workspace_radius: 0.25           # meters
+
+reward:
+  alpha: 1.0                       # position tracking weight
+  beta: 0.1                        # smoothness penalty weight
+  gamma: 0.5                       # orientation tracking weight
+  bonus_threshold: 0.02            # meters, for close-to-target bonus
+  bonus_value: 0.5
+
+training:
+  algorithm: "SAC"
+  total_timesteps: 1_000_000
+  n_envs: 8                        # parallel environments
+  learning_rate: 3.0e-4
+  buffer_size: 1_000_000
+  batch_size: 256
+  tau: 0.005
+  gamma: 0.99
+  learning_starts: 10_000
+  log_interval: 1000
+  save_freq: 50_000
+  log_dir: "logs/"
+  model_dir: "models/"

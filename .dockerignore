@@ -1,0 +1,6 @@
+# exclude entire menagerie by default
+mujoco_menagerie/*
+
+# keep only the robots we support
+!mujoco_menagerie/franka_emika_panda/
+!mujoco_menagerie/universal_robots_ur5e/
