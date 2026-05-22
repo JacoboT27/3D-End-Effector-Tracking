@@ -3,10 +3,9 @@ import yaml
 import argparse
 import numpy as np
 from stable_baselines3 import SAC
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
-
+from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 from env.tracking_env import EETrackingEnv
 
 
@@ -34,11 +33,11 @@ def train(config_path: str):
     # --- parallel training environments ---
     n_envs = train_cfg["n_envs"]
     print(f"Spawning {n_envs} parallel training environments...")
-    train_env = SubprocVecEnv([make_env(config, i) for i in range(n_envs)])
+    train_env = DummyVecEnv([make_env(config, i) for i in range(n_envs)])
     train_env = VecMonitor(train_env)
 
     # --- single eval environment (Lissajous trajectory) ---
-    eval_env = SubprocVecEnv([make_env(config, 0, eval_mode=True)])
+    eval_env = DummyVecEnv([make_env(config, 0, eval_mode=True)])
     eval_env = VecMonitor(eval_env)
 
     # --- callbacks ---
