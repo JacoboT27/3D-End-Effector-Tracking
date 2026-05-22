@@ -27,7 +27,7 @@ A SAC agent observes the noisy state of the arm and the (clean) state of the tar
 
 The agent outputs **delta joint angles** (Δq) — small per-joint changes, capped at `max_delta_q` each step. Two alternatives were rejected. *Cartesian deltas plus an IK solver* would make the RL problem trivial: the inverse-kinematics solver already does the hard geometric work, so the agent would behave only as a filter. *Direct joint-torque control* would force the agent to also learn low-level dynamics, which is outside the scope here.
 
-Delta joint angles sit in between. The agent must discover the arm's kinematics purely from experience, while MuJoCo's built-in PD controller handles the dynamics of reaching each commanded angle. The trained policy is the task-specific inverse-kinematics controller.
+The agent must discover the arm's kinematics purely from experience, while MuJoCo's built-in PD controller handles the dynamics of reaching each commanded angle. The trained policy is the task-specific inverse-kinematics controller.
 
 ### Orientation: 6D representation and geodesic error
 
@@ -43,7 +43,7 @@ The orientation error in the reward is the **geodesic distance** on SO(3)
 
 ### Soft Actor-Critic
 
-The learner is SAC, an off-policy actor-critic algorithm. Off-policy means every transition is stored in a replay buffer and reused for many gradient updates, making it sample-efficient. I considered this the right choice because the simulator runs on CPU with 4 parallel environments. SAC also maximizes policy entropy alongside reward, keeping exploration alive and training stable.
+The learner is SAC, an off-policy actor-critic algorithm. Off-policy means every transition is stored in a replay buffer and reused for many gradient updates, making it sample-efficient. I considered this the right choice because the simulator runs on CPU with 4 parallel environments. SAC also keeps exploration alive and training stable.
 
 ### Uncertainty model
 
@@ -131,13 +131,13 @@ r = − α · ‖p_ee − p_target‖          position tracking error
   + bonus   if ‖position error‖ < threshold
 ```
 
-**Position error** (`α = 1.0`) — the Euclidean distance, in metres, between the hand and the target. This is the primary objective and the dominant term. It is used as a plain distance rather than a squared distance on purpose: squaring over-weights large mistakes and flattens out near zero, leaving the agent with almost no gradient once it is roughly close. A linear distance keeps a steady pull toward the target at every scale.
+**Position error** (`α = 1.0`) — the Euclidean distance, in metres, between the hand and the target. This is the primary objective and the dominant term.
 
-**Smoothness penalty** (`β = 0.1`) — the magnitude of the change in action between consecutive steps. Without it, a policy can chase the target with rapid, oscillating joint commands that look fine on a tracking plot but would be jerky and hard on real hardware. The small weight lets this shape the *style* of motion without overriding the tracking objective.
+**Smoothness penalty** (`β = 0.1`) — the magnitude of the change in action between consecutive steps. 
 
-**Orientation error** (`γ = 0.5`) — the geodesic distance between the hand's rotation and the target rotation, in radians: zero when aligned, up to π when fully opposed. This is what makes the task full 6-DOF rather than position-only. It is weighted below the position term, so the agent prioritizes getting the hand to the right place while still aligning it.
+**Orientation error** (`γ = 0.5`) — the geodesic distance between the hand's rotation and the target rotation, in radians
 
-**Close-to-target bonus** (`+0.5` within `threshold = 0.02 m`) — a small positive reward whenever the hand is within 2 cm of the target. Every other term is a penalty, so without this the best achievable score is zero. The bonus gives the agent an explicit positive signal — a target worth committing to — and pushes the policy toward *precise* tracking instead of settling for "roughly close."
+**Close-to-target bonus** (`+0.5` within `threshold = 0.02 m`) — a small positive reward whenever the hand is within 2 cm of the target. The bonus gives the agent an explicit positive signal
 
 **Scale.** A policy that tracks well sits near +0.4 per step (the bonus firing, minus small penalties); a poor one is strongly negative. Watching the mean episode reward climb toward zero — and the bonus begin to fire — is the clearest sign that training is working.
 
