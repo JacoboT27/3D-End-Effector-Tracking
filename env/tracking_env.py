@@ -9,6 +9,13 @@ from env.noise import ObservationNoise
 from env.utils import rot_mat_to_6d, rot_6d_to_mat, geodesic_distance, quat_to_rot_mat
 
 
+# Relative path (under assets/) to each robot's MJCF file.
+ROBOT_PATHS = {
+    "franka": "franka/panda_nohand.xml",
+    "ur5": "ur5e/ur5e.xml",
+}
+
+
 class EETrackingEnv(gym.Env):
     """
     End-effector tracking environment using MuJoCo position control.
@@ -25,6 +32,7 @@ class EETrackingEnv(gym.Env):
         target_lin_vel  (3,)   target linear velocity (predictive info)
         target_ang_vel  (3,)   target angular velocity
         joint_pos_noisy (n,)   noisy joint positions
+        joint_vel       (n,)   joint velocities (noise-free proprioception)
         prev_action     (n,)   previous delta-q action
 
     Action space:
@@ -41,16 +49,22 @@ class EETrackingEnv(gym.Env):
 
         # --- load MuJoCo model ---
         robot = config["env"]["robot"]
-        ROBOT_PATHS = {"franka": "franka/panda_nohand.xml", "ur5": "ur5e/ur5e.xml"}
         assets_root = os.path.join(os.path.dirname(__file__), "..", "assets")
         asset_path = os.path.abspath(os.path.join(assets_root, ROBOT_PATHS[robot]))
-        self.model = mujoco.MjModel.from_xml_path(os.path.abspath(asset_path))
+        self.model = mujoco.MjModel.from_xml_path(asset_path)
         self.data = mujoco.MjData(self.model)
 
         self.n_joints = self.model.nu  # number of actuators
         self.max_delta_q = config["env"]["max_delta_q"]
         self.episode_steps = config["env"]["episode_steps"]
         self.track_orientation = config["env"]["track_orientation"]
+
+        # physics substeps per agent step: advance one full control period
+        # (1 / control_freq) so the physics clock matches the trajectory clock
+        self.control_freq = config["env"]["control_freq"]
+        self.n_substeps = max(
+            round((1.0 / self.control_freq) / self.model.opt.timestep), 1
+        )
 
         # --- subsystems ---
         self.trajectory = TrajectoryGenerator(config)
@@ -65,7 +79,10 @@ class EETrackingEnv(gym.Env):
         self.bonus_value = rw["bonus_value"]
 
         # --- spaces ---
-        obs_dim = 3 + 6 + 3 + 6 + 3 + 3 + self.n_joints + self.n_joints
+        # ee_pos(3) + ee_ori_6d(6) + target_pos(3) + target_ori_6d(6)
+        # + target_lin_vel(3) + target_ang_vel(3)
+        # + joint_pos(n) + joint_vel(n) + prev_action(n)
+        obs_dim = 3 + 6 + 3 + 6 + 3 + 3 + 3 * self.n_joints
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -79,11 +96,8 @@ class EETrackingEnv(gym.Env):
         self._prev_action = np.zeros(self.n_joints)
         self._current_target = None
 
-        # find EE body id (assumes XML has a body named "ee" or "hand")
+        # find EE body id (assumes XML has a body named "hand", "link7", etc.)
         self._ee_body_id = self._find_ee_body()
-
-        self.control_freq = config["env"]["control_freq"]
-        self.n_substeps = max(round((1.0 / self.control_freq) / self.model.opt.timestep), 1)
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -92,6 +106,7 @@ class EETrackingEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         mujoco.mj_resetData(self.model, self.data)
+        # run forward kinematics so xpos / xquat are valid before _get_obs()
         mujoco.mj_forward(self.model, self.data)
 
         traj_type = "lissajous" if self.eval_mode else None
@@ -120,6 +135,8 @@ class EETrackingEnv(gym.Env):
             self.model.jnt_range[: self.n_joints, 1],
         )
         self.data.ctrl[:] = new_qpos
+
+        # advance physics by one full control period
         for _ in range(self.n_substeps):
             mujoco.mj_step(self.model, self.data)
 
@@ -170,6 +187,7 @@ class EETrackingEnv(gym.Env):
         ee_ori_6d = rot_mat_to_6d(ee_rot)
         ee_ori_6d_noisy = self.noise.apply_ee_ori(ee_ori_6d)
         joint_pos_noisy = self.noise.apply_joints(self.data.qpos[: self.n_joints])
+        joint_vel = self.data.qvel[: self.n_joints].copy()  # own velocity, noise-free
 
         target_ori_6d = rot_mat_to_6d(target_rot)
 
@@ -181,6 +199,7 @@ class EETrackingEnv(gym.Env):
             target_lin_vel,      # (3,)
             target_ang_vel,      # (3,)
             joint_pos_noisy,     # (n_joints,)
+            joint_vel,           # (n_joints,)
             self._prev_action,   # (n_joints,)
         ])
         return obs
@@ -239,10 +258,12 @@ class EETrackingEnv(gym.Env):
         return pos, rot
 
     def _find_ee_body(self) -> int:
+        """Find end-effector body ID by checking common names."""
         candidates = ["hand", "panda_hand", "attachment", "ee", "tool",
-                    "tcp", "end_effector", "wrist_3_link"]
+                      "tcp", "end_effector", "wrist_3_link"]
         for name in candidates:
             bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
             if bid != -1:
                 return bid
+        # fallback: last body in the kinematic chain
         return self.model.nbody - 1
