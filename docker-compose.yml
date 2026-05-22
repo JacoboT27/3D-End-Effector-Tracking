@@ -1,25 +1,30 @@
-version: "3.9"
-
 services:
   train:
+    build: .
     image: ghcr.io/jacobot27/ee-tracking:latest
-    volumes:
-      - ./assets:/workspace/assets      # robot XMLs and meshes
-      - ./models:/workspace/models      # saved models
-      - ./logs:/workspace/logs          # tensorboard logs
-    command: python agent/train.py --config configs/default.yaml
-    environment:
-      - MUJOCO_GL=osmesa
-
-  evaluate:
-    image: ghcr.io/<your-username>/ee-tracking:latest
     volumes:
       - ./assets:/workspace/assets
       - ./models:/workspace/models
       - ./logs:/workspace/logs
-    command: python agent/evaluate.py --config configs/default.yaml --model models/best/best_model
+      - .:/workspace
+    command: python -m agent.train --config configs/default.yaml
     environment:
       - MUJOCO_GL=osmesa
+      - PYTHONPATH=/workspace
+      - OMP_NUM_THREADS=1
+      - PYTHONUNBUFFERED=1
+
+  evaluate:
+    build: .
+    image: ghcr.io/jacobot27/ee-tracking:latest
+    volumes:
+      - ./assets:/workspace/assets
+      - ./models:/workspace/models
+      - ./logs:/workspace/logs
+    command: python -m agent.evaluate --config configs/default.yaml --model models/best/best_model
+    environment:
+      - MUJOCO_GL=osmesa
+      - PYTHONPATH=/workspace
     # For live rendering on Linux, uncomment:
     # environment:
     #   - DISPLAY=${DISPLAY}
