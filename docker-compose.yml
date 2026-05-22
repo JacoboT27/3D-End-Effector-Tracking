@@ -31,3 +31,16 @@ services:
     #   - MUJOCO_GL=glfw
     # volumes:
     #   - /tmp/.X11-unix:/tmp/.X11-unix
+    
+  viewer:
+    build: .
+    image: ghcr.io/jacobot27/ee-tracking:latest
+    volumes:
+      - ./assets:/workspace/assets
+      - ./models:/workspace/models
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      - DISPLAY=${DISPLAY}
+      - MUJOCO_GL=glfw
+      - PYTHONPATH=/workspace
+    command: python -m agent.visualize --model models/best/best_model
