@@ -32,7 +32,7 @@ training:
   learning_rate: 3.0e-4
   buffer_size: 1_000_000
   batch_size: 256
-  gradient_steps: 8                # SAC updates per collection step (1:1 replay ratio with n_envs)
+  gradient_steps: 1               
   tau: 0.005
   gamma: 0.99
   learning_starts: 10_000

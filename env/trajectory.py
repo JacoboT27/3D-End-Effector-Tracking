@@ -7,16 +7,23 @@ class TrajectoryGenerator:
     Generates end-effector trajectories for training and evaluation.
 
     Training:   random waypoints connected with minimum-jerk interpolation.
-    Evaluation: a Lissajous curve (generalization test — never trained on).
+    Evaluation: a Lissajous curve (a novel path, for the generalization test).
 
-    Both trajectories are anchored at the end-effector's position at reset,
-    so every episode starts on-target (no startup tracking gap) and the path
-    is generated around a known-reachable point rather than a fixed absolute
-    workspace coordinate.
+    Both are anchored at the end-effector's position at reset, so every
+    episode starts on-target. Training waypoints are sampled from a region
+    large enough to contain the full eval Lissajous, so the policy practices
+    everywhere the eval curve visits.
+
+    The orientation target is a fixed downward pose for both training and
+    evaluation -- a pose reachable throughout the workspace (uniformly random
+    orientations are mostly kinematically infeasible and corrupt training).
 
     Every step returns:
         (position, linear_velocity, orientation_matrix, angular_velocity)
     """
+
+    # Lissajous amplitude per axis, as a fraction of workspace_radius.
+    _LIS_AMP = np.array([0.8, 0.8, 0.4])
 
     def __init__(self, config):
         self.traj_type = config["trajectory"]["train_type"]
@@ -26,11 +33,18 @@ class TrajectoryGenerator:
         self.radius = config["trajectory"]["workspace_radius"]
         self.dt = 1.0 / config["env"]["control_freq"]
 
+        # fixed downward end-effector orientation, used by train and eval alike
+        self.down_orientation = Rotation.from_euler("xyz", [np.pi, 0, 0]).as_matrix()
+
+        # training waypoints are sampled within this radius of the anchor --
+        # large enough to contain the eval Lissajous (which reaches
+        # norm(_LIS_AMP) * radius from its centre), with a 10% margin
+        self.train_radius = self.radius * float(np.linalg.norm(self._LIS_AMP)) * 1.1
+
         self.t = 0.0
         self.waypoints = []
         self.orientations = []
         self.total_duration = 0.0
-        # trajectory start point; overridden every reset() with the EE position
         self.anchor = self.center.copy()
 
     # ------------------------------------------------------------------
@@ -41,9 +55,8 @@ class TrajectoryGenerator:
         """
         Sample a new trajectory. Call at the start of each episode.
 
-        start_pos : the current end-effector position. The trajectory is
-                    anchored here so the agent starts already on-target.
-                    Falls back to workspace_center if not provided.
+        start_pos : current end-effector position; the trajectory is anchored
+                    here so the agent starts already on-target.
         """
         self.t = 0.0
         ttype = traj_type or self.traj_type
@@ -75,46 +88,37 @@ class TrajectoryGenerator:
     def _init_waypoints(self):
         n = self.n_waypoints
         # first waypoint is the anchor (current EE) -> no startup gap;
-        # the rest are random points sampled around it
+        # the rest are random points across the eval-curve region
         self.waypoints = [self.anchor.copy()]
         self.waypoints += [self._random_workspace_point() for _ in range(n)]
-        self.orientations = [Rotation.random().as_matrix() for _ in range(n + 1)]
+        # fixed downward orientation at every waypoint -- matches the eval
+        # target and is reachable everywhere, unlike uniformly random poses
+        self.orientations = [self.down_orientation.copy() for _ in range(n + 1)]
         self.total_duration = n * self.interp_duration
 
     def _random_workspace_point(self):
-        """Uniform sample inside a sphere around the anchor."""
+        """Uniform sample inside a sphere of train_radius around the anchor."""
         while True:
             p = np.random.uniform(-1, 1, 3)
             if np.linalg.norm(p) <= 1.0:
-                return self.anchor + p * self.radius
+                return self.anchor + p * self.train_radius
 
     # ------------------------------------------------------------------
     # Lissajous trajectory (evaluation)
     # ------------------------------------------------------------------
 
     def _init_lissajous(self):
-        # frequency ratios produce a visually rich 3D curve
+        # zero phase offsets -> the curve's t=0 point is its own centre, so it
+        # starts exactly on the anchor and stays centred on the training
+        # region (no startup gap, no train/eval spatial offset)
+        ax, ay, az = self.radius * self._LIS_AMP
         self.lis_params = {
-            "Ax": self.radius * 0.8,
-            "Ay": self.radius * 0.8,
-            "Az": self.radius * 0.4,
-            "wx": 1.0,
-            "wy": 2.0,
-            "wz": 3.0,
-            "px": 0.0,
-            "py": np.pi / 4,
-            "pz": np.pi / 2,
+            "Ax": ax, "Ay": ay, "Az": az,
+            "wx": 1.0, "wy": 2.0, "wz": 3.0,
+            "px": 0.0, "py": 0.0, "pz": 0.0,
         }
-        # shift the whole curve so its t=0 point lands exactly on the anchor
-        p = self.lis_params
-        natural_start = np.array([
-            p["Ax"] * np.sin(p["px"]),
-            p["Ay"] * np.sin(p["py"]),
-            p["Az"] * np.sin(p["pz"]),
-        ])
-        self.lis_center = self.anchor - natural_start
-        # fixed orientation target: end-effector pointing downward
-        self.lis_orientation = Rotation.from_euler("xyz", [np.pi, 0, 0]).as_matrix()
+        self.lis_center = self.anchor.copy()
+        self.lis_orientation = self.down_orientation
         self.total_duration = 10.0  # seconds, one full Lissajous cycle
 
     # ------------------------------------------------------------------
@@ -140,18 +144,16 @@ class TrajectoryGenerator:
         y2 = c[1] + p["Ay"] * np.sin(p["wy"] * (t + dt) + p["py"])
         z2 = c[2] + p["Az"] * np.sin(p["wz"] * (t + dt) + p["pz"])
         vel = (np.array([x2, y2, z2]) - pos) / dt
-
         return pos, vel
 
     def _waypoint_pos(self, t):
         segment = int(t / self.interp_duration)
         segment = min(segment, len(self.waypoints) - 2)
-        tau = (t - segment * self.interp_duration) / self.interp_duration  # [0,1]
+        tau = (t - segment * self.interp_duration) / self.interp_duration
 
         p0 = self.waypoints[segment]
         p1 = self.waypoints[segment + 1]
 
-        # minimum-jerk interpolation
         s = self._min_jerk(tau)
         ds = self._min_jerk_dot(tau) / self.interp_duration
 
@@ -183,11 +185,10 @@ class TrajectoryGenerator:
         R_next = self._slerp(R0, R1, s2)
         dR = R_next.as_matrix() @ rot_mat.T
         ang_vel = Rotation.from_matrix(dR).as_rotvec() / dt
-
         return rot_mat, ang_vel
 
     @staticmethod
-    def _slerp(r0: Rotation, r1: Rotation, t: float) -> Rotation:
+    def _slerp(r0, r1, t):
         """Spherical linear interpolation between two rotations."""
         rotvec = (r1 * r0.inv()).as_rotvec()
         return Rotation.from_rotvec(t * rotvec) * r0
@@ -198,7 +199,7 @@ class TrajectoryGenerator:
 
     @staticmethod
     def _min_jerk(t):
-        """Minimum-jerk scalar interpolation s(t), t in [0,1]."""
+        """Minimum-jerk scalar interpolation s(t), t in [0, 1]."""
         t = np.clip(t, 0.0, 1.0)
         return 10 * t**3 - 15 * t**4 + 6 * t**5
 

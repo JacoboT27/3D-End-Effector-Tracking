@@ -3,9 +3,6 @@ services:
     build: .
     image: ghcr.io/jacobot27/ee-tracking:latest
     volumes:
-      - ./assets:/workspace/assets
-      - ./models:/workspace/models
-      - ./logs:/workspace/logs
       - .:/workspace
     command: python -m agent.train --config configs/default.yaml
     environment:
@@ -18,26 +15,17 @@ services:
     build: .
     image: ghcr.io/jacobot27/ee-tracking:latest
     volumes:
-      - ./assets:/workspace/assets
-      - ./models:/workspace/models
-      - ./logs:/workspace/logs
+      - .:/workspace
     command: python -m agent.evaluate --config configs/default.yaml --model models/best/best_model
     environment:
       - MUJOCO_GL=osmesa
       - PYTHONPATH=/workspace
-    # For live rendering on Linux, uncomment:
-    # environment:
-    #   - DISPLAY=${DISPLAY}
-    #   - MUJOCO_GL=glfw
-    # volumes:
-    #   - /tmp/.X11-unix:/tmp/.X11-unix
     
   viewer:
     build: .
     image: ghcr.io/jacobot27/ee-tracking:latest
     volumes:
-      - ./assets:/workspace/assets
-      - ./models:/workspace/models
+      - .:/workspace
       - /tmp/.X11-unix:/tmp/.X11-unix
     environment:
       - DISPLAY=${DISPLAY}

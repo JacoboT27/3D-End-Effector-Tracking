@@ -1,11 +1,16 @@
 import os
 import yaml
 import argparse
-import numpy as np
+
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import (
+    CheckpointCallback,
+    EvalCallback,
+    StopTrainingOnNoModelImprovement,
+)
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.logger import configure
 
 from env.tracking_env import EETrackingEnv
 
@@ -28,8 +33,10 @@ def train(config_path: str):
     config = load_config(config_path)
     train_cfg = config["training"]
 
-    os.makedirs(train_cfg["log_dir"], exist_ok=True)
-    os.makedirs(train_cfg["model_dir"], exist_ok=True)
+    log_dir = train_cfg["log_dir"]
+    model_dir = train_cfg["model_dir"]
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
 
     # --- training environments ---
     n_envs = train_cfg["n_envs"]
@@ -41,19 +48,31 @@ def train(config_path: str):
     eval_env = DummyVecEnv([make_env(config, 0, eval_mode=True)])
     eval_env = VecMonitor(eval_env)
 
+    # eval_freq is counted in agent steps; divide the desired timestep
+    # interval by n_envs, since the vec env advances n_envs timesteps per step
+    eval_freq = max(train_cfg.get("eval_freq", 10_000) // n_envs, 1)
+
+    # --- early stopping: halt once eval reward stops improving ---
+    stop_cb = StopTrainingOnNoModelImprovement(
+        max_no_improvement_evals=train_cfg.get("early_stop_patience", 10),
+        min_evals=train_cfg.get("early_stop_min_evals", 20),
+        verbose=1,
+    )
+
     # --- callbacks ---
     checkpoint_cb = CheckpointCallback(
         save_freq=max(train_cfg["save_freq"] // n_envs, 1),
-        save_path=train_cfg["model_dir"],
+        save_path=model_dir,
         name_prefix="sac_ee_tracking",
     )
     eval_cb = EvalCallback(
         eval_env,
-        best_model_save_path=os.path.join(train_cfg["model_dir"], "best"),
-        log_path=train_cfg["log_dir"],
-        eval_freq=max(10_000 // n_envs, 1),
-        n_eval_episodes=5,
+        best_model_save_path=os.path.join(model_dir, "best"),
+        log_path=log_dir,                       # writes evaluations.npz
+        eval_freq=eval_freq,
+        n_eval_episodes=train_cfg.get("n_eval_episodes", 5),
         deterministic=True,
+        callback_after_eval=stop_cb,            # early stopping on plateau
         verbose=1,
     )
 
@@ -69,8 +88,11 @@ def train(config_path: str):
         learning_starts=train_cfg["learning_starts"],
         gradient_steps=train_cfg["gradient_steps"],
         verbose=1,
-        tensorboard_log=train_cfg["log_dir"],
     )
+
+    # log to stdout + CSV + TensorBoard, all under log_dir.
+    # progress.csv is what plot_training.py reads to draw the curves.
+    model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
     print("Starting training...")
     model.learn(
@@ -79,7 +101,7 @@ def train(config_path: str):
         log_interval=train_cfg["log_interval"],
     )
 
-    final_path = os.path.join(train_cfg["model_dir"], "sac_ee_tracking_final")
+    final_path = os.path.join(model_dir, "sac_ee_tracking_final")
     model.save(final_path)
     print(f"Training complete. Model saved to {final_path}")
 
