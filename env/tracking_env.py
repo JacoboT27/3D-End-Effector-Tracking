@@ -41,9 +41,9 @@ class EETrackingEnv(gym.Env):
 
         # --- load MuJoCo model ---
         robot = config["env"]["robot"]
-        asset_path = os.path.join(
-            os.path.dirname(__file__), "..", "assets", f"{robot}.xml"
-        )
+        ROBOT_PATHS = {"franka": "franka/panda_nohand.xml", "ur5": "ur5e/ur5e.xml"}
+        assets_root = os.path.join(os.path.dirname(__file__), "..", "assets")
+        asset_path = os.path.abspath(os.path.join(assets_root, ROBOT_PATHS[robot]))
         self.model = mujoco.MjModel.from_xml_path(os.path.abspath(asset_path))
         self.data = mujoco.MjData(self.model)
 
@@ -234,13 +234,10 @@ class EETrackingEnv(gym.Env):
         return pos, rot
 
     def _find_ee_body(self) -> int:
-        """Find end-effector body ID by checking common names."""
-        candidates = ["hand", "ee", "tool", "tcp", "end_effector", "link_ee",
-                      "panda_hand", "wrist_3_link"]
+        candidates = ["hand", "panda_hand", "attachment", "ee", "tool",
+                    "tcp", "end_effector", "wrist_3_link"]
         for name in candidates:
-            try:
-                return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
-            except Exception:
-                continue
-        # fallback: last body in the kinematic chain
+            bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if bid != -1:
+                return bid
         return self.model.nbody - 1
