@@ -13,42 +13,45 @@ A reinforcement learning system for controlling a robotic arm to track a desired
 
 ## Setup
 
-### Local
+The Docker image is hosted on GHCR and includes all dependencies. The only thing you need to download locally are the robot model files.
 
 ```bash
-# 1. pull robot models
-git submodule update --init
+# 1. clone the repo
+git clone <your-repo-url>
+cd ee-tracking
 
-# 2. install dependencies
-pip install -r requirements.txt
+# 2. download robot model files (XML + meshes)
+bash scripts/download_assets.sh
 
-# 3. train
-python agent/train.py --config configs/default.yaml
-
-# 4. evaluate
-python agent/evaluate.py --model models/best/best_model
-```
-
-### Docker
-
-```bash
-# pull robot models first (required before building image)
-git submodule update --init
-
-# train
+# 3. pull the image and train
 docker-compose up train
 
-# evaluate
+# 4. evaluate once training is done
 docker-compose up evaluate
 ```
 
+That's it. No Python installation, no submodules, no build step.
+
 > **Note on rendering:** Training runs headless by default (`MUJOCO_GL=osmesa`). For live rendering on Linux, see the commented section in `docker-compose.yml` for X11 forwarding.
+
+## Local Setup (no Docker)
+
+```bash
+git clone <your-repo-url>
+cd ee-tracking
+bash scripts/download_assets.sh
+pip install -r requirements.txt
+python agent/train.py --config configs/default.yaml
+python agent/evaluate.py --model models/best/best_model
+```
 
 ## Project Structure
 
 ```
 ee-tracking/
-├── mujoco_menagerie/           # git submodule — robot MJCF models
+├── assets/                     # created by download_assets.sh
+│   ├── franka/                 # Franka Panda XML + meshes
+│   └── ur5e/                   # UR5e XML + meshes
 ├── env/
 │   ├── tracking_env.py         # Gymnasium environment
 │   ├── trajectory.py           # Waypoint + Lissajous generators
@@ -57,8 +60,10 @@ ee-tracking/
 ├── agent/
 │   ├── train.py                # SAC training with parallel envs
 │   └── evaluate.py             # Evaluation + trajectory plots
+├── scripts/
+│   └── download_assets.sh      # downloads robot model files
 ├── configs/
-│   └── default.yaml            # All hyperparameters
+│   └── default.yaml            # all hyperparameters
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt
@@ -74,8 +79,6 @@ ee-tracking/
 Switch robot in `configs/default.yaml` under `env.robot`.
 
 ## Configuration
-
-All parameters are in `configs/default.yaml`. Key options:
 
 | Parameter | Default | Description |
 |---|---|---|

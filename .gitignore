@@ -1,0 +1,12 @@
+# robot model files — downloaded via scripts/download_assets.sh
+assets/
+
+# training outputs
+models/
+logs/
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/

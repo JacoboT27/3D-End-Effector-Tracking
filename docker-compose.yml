@@ -2,23 +2,25 @@ version: "3.9"
 
 services:
   train:
-    build: .
+    image: ghcr.io/jacobot27/ee-tracking:latest
     volumes:
-      - ./models:/workspace/models
-      - ./logs:/workspace/logs
+      - ./assets:/workspace/assets      # robot XMLs and meshes
+      - ./models:/workspace/models      # saved models
+      - ./logs:/workspace/logs          # tensorboard logs
     command: python agent/train.py --config configs/default.yaml
     environment:
-      - MUJOCO_GL=osmesa   # headless rendering during training
+      - MUJOCO_GL=osmesa
 
   evaluate:
-    build: .
+    image: ghcr.io/<your-username>/ee-tracking:latest
     volumes:
+      - ./assets:/workspace/assets
       - ./models:/workspace/models
       - ./logs:/workspace/logs
     command: python agent/evaluate.py --config configs/default.yaml --model models/best/best_model
     environment:
       - MUJOCO_GL=osmesa
-    # For display on Linux, uncomment:
+    # For live rendering on Linux, uncomment:
     # environment:
     #   - DISPLAY=${DISPLAY}
     #   - MUJOCO_GL=glfw
