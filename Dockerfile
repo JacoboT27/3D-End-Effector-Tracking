@@ -3,6 +3,8 @@ FROM python:3.11-slim
 # system dependencies for MuJoCo rendering and build tools
 RUN apt-get update && apt-get install -y \
     libgl1 \
+    libgl1-mesa-dri \
+    libglfw3 \
     libosmesa6 \
     libglib2.0-0 \
     libsm6 \
