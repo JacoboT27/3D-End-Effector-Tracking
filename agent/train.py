@@ -3,9 +3,10 @@ import yaml
 import argparse
 import numpy as np
 from stable_baselines3 import SAC
+from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+
 from env.tracking_env import EETrackingEnv
 
 
@@ -30,9 +31,9 @@ def train(config_path: str):
     os.makedirs(train_cfg["log_dir"], exist_ok=True)
     os.makedirs(train_cfg["model_dir"], exist_ok=True)
 
-    # --- parallel training environments ---
+    # --- training environments ---
     n_envs = train_cfg["n_envs"]
-    print(f"Spawning {n_envs} parallel training environments...")
+    print(f"Creating {n_envs} training environments...")
     train_env = DummyVecEnv([make_env(config, i) for i in range(n_envs)])
     train_env = VecMonitor(train_env)
 
@@ -66,6 +67,7 @@ def train(config_path: str):
         tau=train_cfg["tau"],
         gamma=train_cfg["gamma"],
         learning_starts=train_cfg["learning_starts"],
+        gradient_steps=train_cfg["gradient_steps"],
         verbose=1,
         tensorboard_log=train_cfg["log_dir"],
     )

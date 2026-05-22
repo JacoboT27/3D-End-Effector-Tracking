@@ -1,18 +1,14 @@
 """
-Visualize a trained policy in the MuJoCo viewer.
+Visualize a trained policy in an interactive MuJoCo viewer window.
 
-Opens an interactive simulator window and runs the SAC policy on the
-Lissajous evaluation trajectory. A red sphere marks the current target;
-an amber trail shows the target path and a blue trail shows the
-end-effector path, so you can watch the arm trace the curve.
+Runs the SAC policy on the Lissajous evaluation trajectory and opens the
+MuJoCo viewer. A red sphere marks the current target; an amber trail shows
+the target path and a blue trail shows the end-effector path.
 
-Run locally (needs a display — not inside the headless Docker container):
+Designed to run from the Docker `viewer` service (Linux + X11 forwarding):
 
-    python -m agent.visualize --model models/best/best_model
-
-Optional flags:
-    --speed 0.5     play at half speed to inspect tracking closely
-    --trail 200     keep a longer path trail
+    xhost +local:                  # once, on the host
+    docker compose up --build viewer
 
 Press Esc or close the window to quit.
 """
@@ -31,7 +27,7 @@ from env.tracking_env import EETrackingEnv
 
 
 def load_config(path):
-    with open(path, "r") as f:
+    with open(path) as f:
         return yaml.safe_load(f)
 
 
@@ -74,7 +70,7 @@ def main():
     errors = []
     episode = 1
 
-    print("Launching viewer — close the window or press Esc to quit.")
+    print("Launching viewer - close the window or press Esc to quit.")
 
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         # frame the workspace
@@ -89,14 +85,12 @@ def main():
             action, _ = policy.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
 
-            # current target + end-effector positions
             target_pos = np.array(env._current_target[0])
             ee_pos, _ = env._get_ee_pose()
             target_trail.append(target_pos)
             ee_trail.append(np.array(ee_pos))
             errors.append(info["pos_error"])
 
-            # redraw markers each frame
             scn = viewer.user_scn
             scn.ngeom = 0
             for p in target_trail:
@@ -108,15 +102,14 @@ def main():
             viewer.sync()
 
             if terminated or truncated:
-                mean_err = np.mean(errors) * 100.0
-                print(f"episode {episode}: mean position error = {mean_err:.1f} cm")
+                print(f"episode {episode}: mean position error = "
+                      f"{np.mean(errors) * 100:.1f} cm")
                 obs, _ = env.reset()
                 target_trail.clear()
                 ee_trail.clear()
                 errors.clear()
                 episode += 1
 
-            # real-time pacing
             sleep = dt / args.speed - (time.time() - step_start)
             if sleep > 0:
                 time.sleep(sleep)

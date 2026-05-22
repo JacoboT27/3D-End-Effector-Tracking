@@ -2,8 +2,9 @@ import os
 import yaml
 import argparse
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")  # headless: write plots to file, no GUI window
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from stable_baselines3 import SAC
 
 from env.tracking_env import EETrackingEnv
@@ -14,11 +15,10 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def evaluate(config_path: str, model_path: str, n_episodes: int = 3, render: bool = False):
+def evaluate(config_path: str, model_path: str, n_episodes: int = 3):
     config = load_config(config_path)
 
-    render_mode = "human" if render else None
-    env = EETrackingEnv(config, render_mode=render_mode, eval_mode=True)
+    env = EETrackingEnv(config, eval_mode=True)
 
     model = SAC.load(model_path, env=env)
     print(f"Loaded model from {model_path}")
@@ -86,7 +86,8 @@ def _plot_trajectory(ee_pos, target_pos, pos_errors, ori_errors):
     # position error over time
     ax2 = fig.add_subplot(132)
     ax2.plot(pos_errors, "r-", linewidth=1)
-    ax2.axhline(np.mean(pos_errors), color="k", linestyle="--", label=f"Mean={np.mean(pos_errors):.4f}m")
+    ax2.axhline(np.mean(pos_errors), color="k", linestyle="--",
+                label=f"Mean={np.mean(pos_errors):.4f}m")
     ax2.set_title("Position Tracking Error")
     ax2.set_xlabel("Step"); ax2.set_ylabel("Error (m)")
     ax2.legend()
@@ -94,7 +95,8 @@ def _plot_trajectory(ee_pos, target_pos, pos_errors, ori_errors):
     # orientation error over time
     ax3 = fig.add_subplot(133)
     ax3.plot(ori_errors, "b-", linewidth=1)
-    ax3.axhline(np.mean(ori_errors), color="k", linestyle="--", label=f"Mean={np.mean(ori_errors):.4f}rad")
+    ax3.axhline(np.mean(ori_errors), color="k", linestyle="--",
+                label=f"Mean={np.mean(ori_errors):.4f}rad")
     ax3.set_title("Orientation Tracking Error")
     ax3.set_xlabel("Step"); ax3.set_ylabel("Error (rad)")
     ax3.legend()
@@ -103,7 +105,7 @@ def _plot_trajectory(ee_pos, target_pos, pos_errors, ori_errors):
     os.makedirs("logs", exist_ok=True)
     plt.savefig("logs/eval_trajectory.png", dpi=150)
     print("Saved trajectory plot to logs/eval_trajectory.png")
-    plt.show()
+    plt.close(fig)
 
 
 if __name__ == "__main__":
@@ -111,7 +113,6 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default="configs/default.yaml")
     parser.add_argument("--model", type=str, default="models/best/best_model")
     parser.add_argument("--episodes", type=int, default=3)
-    parser.add_argument("--render", action="store_true")
     args = parser.parse_args()
 
-    evaluate(args.config, args.model, args.episodes, args.render)
+    evaluate(args.config, args.model, args.episodes)
