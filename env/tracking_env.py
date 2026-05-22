@@ -105,12 +105,21 @@ class EETrackingEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        mujoco.mj_resetData(self.model, self.data)
-        # run forward kinematics so xpos / xquat are valid before _get_obs()
+
+        # reset to the model's "home" keyframe (a sensible ready pose) if it
+        # has one; otherwise fall back to the default joint configuration
+        if self.model.nkey > 0:
+            mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+        else:
+            mujoco.mj_resetData(self.model, self.data)
+        # forward kinematics so xpos / xquat are valid before they are read
         mujoco.mj_forward(self.model, self.data)
 
+        # anchor the trajectory at the current end-effector position, so the
+        # agent starts every episode already on-target (no startup gap)
+        ee_pos, _ = self._get_ee_pose()
         traj_type = "lissajous" if self.eval_mode else None
-        self.trajectory.reset(traj_type=traj_type)
+        self.trajectory.reset(traj_type=traj_type, start_pos=ee_pos)
 
         self._step_count = 0
         self._prev_action = np.zeros(self.n_joints)

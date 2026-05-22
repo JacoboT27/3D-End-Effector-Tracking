@@ -6,18 +6,23 @@ class TrajectoryGenerator:
     """
     Generates end-effector trajectories for training and evaluation.
 
-    Training: random waypoints with minimum-jerk interpolation.
-    Evaluation: Lissajous curve.
+    Training:   random waypoints connected with minimum-jerk interpolation.
+    Evaluation: a Lissajous curve (generalization test — never trained on).
 
-    All trajectories return (position, linear_velocity, orientation_matrix, angular_velocity)
-    at each timestep.
+    Both trajectories are anchored at the end-effector's position at reset,
+    so every episode starts on-target (no startup tracking gap) and the path
+    is generated around a known-reachable point rather than a fixed absolute
+    workspace coordinate.
+
+    Every step returns:
+        (position, linear_velocity, orientation_matrix, angular_velocity)
     """
 
     def __init__(self, config):
         self.traj_type = config["trajectory"]["train_type"]
         self.n_waypoints = config["trajectory"]["n_waypoints"]
         self.interp_duration = config["trajectory"]["interp_duration"]
-        self.center = np.array(config["trajectory"]["workspace_center"])
+        self.center = np.array(config["trajectory"]["workspace_center"], dtype=float)
         self.radius = config["trajectory"]["workspace_radius"]
         self.dt = 1.0 / config["env"]["control_freq"]
 
@@ -25,15 +30,27 @@ class TrajectoryGenerator:
         self.waypoints = []
         self.orientations = []
         self.total_duration = 0.0
+        # trajectory start point; overridden every reset() with the EE position
+        self.anchor = self.center.copy()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def reset(self, traj_type=None):
+    def reset(self, traj_type=None, start_pos=None):
+        """
+        Sample a new trajectory. Call at the start of each episode.
+
+        start_pos : the current end-effector position. The trajectory is
+                    anchored here so the agent starts already on-target.
+                    Falls back to workspace_center if not provided.
+        """
         self.t = 0.0
         ttype = traj_type or self.traj_type
-        self.traj_type = ttype        
+        self.traj_type = ttype
+        self.anchor = (np.array(start_pos, dtype=float)
+                       if start_pos is not None else self.center.copy())
+
         if ttype == "waypoint":
             self._init_waypoints()
         elif ttype == "lissajous":
@@ -42,14 +59,7 @@ class TrajectoryGenerator:
             raise ValueError(f"Unknown trajectory type: {ttype}")
 
     def step(self):
-        """
-        Advance time by one control step.
-        Returns:
-            pos      : (3,)  target position
-            lin_vel  : (3,)  target linear velocity
-            rot_mat  : (3,3) target orientation as rotation matrix
-            ang_vel  : (3,)  target angular velocity
-        """
+        """Advance time by one control step and return the current target."""
         pos, lin_vel = self._get_position(self.t)
         rot_mat, ang_vel = self._get_orientation(self.t)
         self.t += self.dt
@@ -64,25 +74,26 @@ class TrajectoryGenerator:
 
     def _init_waypoints(self):
         n = self.n_waypoints
-        # sample random positions within a sphere
-        self.waypoints = [self._random_workspace_point() for _ in range(n + 1)]
-        # sample random orientations
+        # first waypoint is the anchor (current EE) -> no startup gap;
+        # the rest are random points sampled around it
+        self.waypoints = [self.anchor.copy()]
+        self.waypoints += [self._random_workspace_point() for _ in range(n)]
         self.orientations = [Rotation.random().as_matrix() for _ in range(n + 1)]
         self.total_duration = n * self.interp_duration
 
     def _random_workspace_point(self):
-        """Uniform sample inside a sphere."""
+        """Uniform sample inside a sphere around the anchor."""
         while True:
             p = np.random.uniform(-1, 1, 3)
             if np.linalg.norm(p) <= 1.0:
-                return self.center + p * self.radius
+                return self.anchor + p * self.radius
 
     # ------------------------------------------------------------------
     # Lissajous trajectory (evaluation)
     # ------------------------------------------------------------------
 
     def _init_lissajous(self):
-        # frequency ratios give visually rich 3D curves
+        # frequency ratios produce a visually rich 3D curve
         self.lis_params = {
             "Ax": self.radius * 0.8,
             "Ay": self.radius * 0.8,
@@ -94,33 +105,40 @@ class TrajectoryGenerator:
             "py": np.pi / 4,
             "pz": np.pi / 2,
         }
-        # fixed orientation: keep end-effector pointing downward
+        # shift the whole curve so its t=0 point lands exactly on the anchor
+        p = self.lis_params
+        natural_start = np.array([
+            p["Ax"] * np.sin(p["px"]),
+            p["Ay"] * np.sin(p["py"]),
+            p["Az"] * np.sin(p["pz"]),
+        ])
+        self.lis_center = self.anchor - natural_start
+        # fixed orientation target: end-effector pointing downward
         self.lis_orientation = Rotation.from_euler("xyz", [np.pi, 0, 0]).as_matrix()
-        self.total_duration = 10.0  # seconds, full Lissajous cycle
+        self.total_duration = 10.0  # seconds, one full Lissajous cycle
 
     # ------------------------------------------------------------------
-    # Position evaluation
+    # Position
     # ------------------------------------------------------------------
 
     def _get_position(self, t):
-        if self.traj_type == "lissajous" or (
-            hasattr(self, "lis_params") and self.traj_type != "waypoint"
-        ):
+        if self.traj_type == "lissajous":
             return self._lissajous_pos(t)
         return self._waypoint_pos(t)
 
     def _lissajous_pos(self, t):
         p = self.lis_params
-        x = self.center[0] + p["Ax"] * np.sin(p["wx"] * t + p["px"])
-        y = self.center[1] + p["Ay"] * np.sin(p["wy"] * t + p["py"])
-        z = self.center[2] + p["Az"] * np.sin(p["wz"] * t + p["pz"])
+        c = self.lis_center
+        x = c[0] + p["Ax"] * np.sin(p["wx"] * t + p["px"])
+        y = c[1] + p["Ay"] * np.sin(p["wy"] * t + p["py"])
+        z = c[2] + p["Az"] * np.sin(p["wz"] * t + p["pz"])
         pos = np.array([x, y, z])
 
         # numerical velocity
         dt = 1e-4
-        x2 = self.center[0] + p["Ax"] * np.sin(p["wx"] * (t + dt) + p["px"])
-        y2 = self.center[1] + p["Ay"] * np.sin(p["wy"] * (t + dt) + p["py"])
-        z2 = self.center[2] + p["Az"] * np.sin(p["wz"] * (t + dt) + p["pz"])
+        x2 = c[0] + p["Ax"] * np.sin(p["wx"] * (t + dt) + p["px"])
+        y2 = c[1] + p["Ay"] * np.sin(p["wy"] * (t + dt) + p["py"])
+        z2 = c[2] + p["Az"] * np.sin(p["wz"] * (t + dt) + p["pz"])
         vel = (np.array([x2, y2, z2]) - pos) / dt
 
         return pos, vel
@@ -142,11 +160,11 @@ class TrajectoryGenerator:
         return pos, vel
 
     # ------------------------------------------------------------------
-    # Orientation evaluation
+    # Orientation
     # ------------------------------------------------------------------
 
     def _get_orientation(self, t):
-        if hasattr(self, "lis_orientation"):
+        if self.traj_type == "lissajous":
             return self.lis_orientation, np.zeros(3)
 
         segment = int(t / self.interp_duration)
@@ -156,8 +174,7 @@ class TrajectoryGenerator:
         s = self._min_jerk(tau)
         R0 = Rotation.from_matrix(self.orientations[segment])
         R1 = Rotation.from_matrix(self.orientations[segment + 1])
-        # SLERP between orientations
-        R_interp = Rotation.slerp_single(R0, R1, s) if False else self._slerp(R0, R1, s)
+        R_interp = self._slerp(R0, R1, s)
         rot_mat = R_interp.as_matrix()
 
         # numerical angular velocity
@@ -171,7 +188,7 @@ class TrajectoryGenerator:
 
     @staticmethod
     def _slerp(r0: Rotation, r1: Rotation, t: float) -> Rotation:
-        """Simple SLERP between two Rotations."""
+        """Spherical linear interpolation between two rotations."""
         rotvec = (r1 * r0.inv()).as_rotvec()
         return Rotation.from_rotvec(t * rotvec) * r0
 
@@ -187,6 +204,6 @@ class TrajectoryGenerator:
 
     @staticmethod
     def _min_jerk_dot(t):
-        """Derivative of minimum-jerk profile."""
+        """Derivative of the minimum-jerk profile."""
         t = np.clip(t, 0.0, 1.0)
         return 30 * t**2 - 60 * t**3 + 30 * t**4
