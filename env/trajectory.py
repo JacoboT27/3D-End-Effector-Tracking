@@ -6,39 +6,53 @@ class TrajectoryGenerator:
     """
     Generates end-effector trajectories for training and evaluation.
 
-    Training:   random waypoints connected with minimum-jerk interpolation.
-    Evaluation: a Lissajous curve (a novel path, for the generalization test).
+    Training:   randomized Lissajous curves -- a fresh curve every episode,
+                with random per-axis amplitude, frequency and phase.
+    Evaluation: a single fixed ("canonical") Lissajous curve, so the eval
+                score is a stable, comparable benchmark across runs.
 
-    Both are anchored at the end-effector's position at reset, so every
-    episode starts on-target. Training waypoints are sampled from a region
-    large enough to contain the full eval Lissajous, so the policy practices
-    everywhere the eval curve visits.
+    Training on randomized Lissajous curves (rather than slow random
+    waypoints) closes the train/eval gap: the agent practices the same
+    family of motion -- and the same speeds -- it is evaluated on, while
+    the per-episode randomization keeps it a genuine tracking skill rather
+    than a memorized path.
 
-    The orientation target is a fixed downward pose for both training and
-    evaluation -- a pose reachable throughout the workspace (uniformly random
-    orientations are mostly kinematically infeasible and corrupt training).
+    Both train and eval curves are anchored at the end-effector's position
+    at reset (the curve's t=0 point is shifted onto the anchor), so every
+    episode starts on-target with no positional startup gap.
+
+    The orientation target ramps smoothly from the EE's actual orientation
+    at reset to a fixed downward pose over `ori_ramp_duration` seconds, then
+    holds downward. This removes the orientation startup transient.
 
     Every step returns:
         (position, linear_velocity, orientation_matrix, angular_velocity)
     """
 
-    # Lissajous amplitude per axis, as a fraction of workspace_radius.
+    # Canonical (evaluation) Lissajous amplitude per axis, as a fraction of
+    # workspace_radius. Training amplitudes are randomized instead.
     _LIS_AMP = np.array([0.8, 0.8, 0.4])
 
     def __init__(self, config):
-        self.traj_type = config["trajectory"]["train_type"]
-        self.n_waypoints = config["trajectory"]["n_waypoints"]
-        self.interp_duration = config["trajectory"]["interp_duration"]
-        self.center = np.array(config["trajectory"]["workspace_center"], dtype=float)
-        self.radius = config["trajectory"]["workspace_radius"]
+        traj_cfg = config["trajectory"]
+        self.traj_type = traj_cfg["train_type"]
+        self.n_waypoints = traj_cfg["n_waypoints"]
+        self.interp_duration = traj_cfg["interp_duration"]
+        self.center = np.array(traj_cfg["workspace_center"], dtype=float)
+        self.radius = traj_cfg["workspace_radius"]
         self.dt = 1.0 / config["env"]["control_freq"]
 
-        # fixed downward end-effector orientation, used by train and eval alike
+        # --- Lissajous settings ---
+        self.lissajous_duration = traj_cfg.get("lissajous_duration", 10.0)
+        self.ori_ramp_duration = traj_cfg.get("ori_ramp_duration", 1.5)
+        # per-axis randomization ranges for *training* curves
+        self.train_amp_range = traj_cfg.get("train_amp_range", [0.3, 1.0])
+        self.train_freq_range = traj_cfg.get("train_freq_range", [0.5, 3.0])
+
+        # fixed downward end-effector orientation (the steady-state target)
         self.down_orientation = Rotation.from_euler("xyz", [np.pi, 0, 0]).as_matrix()
 
-        # training waypoints are sampled within this radius of the anchor --
-        # large enough to contain the eval Lissajous (which reaches
-        # norm(_LIS_AMP) * radius from its centre), with a 10% margin
+        # waypoint sampling radius -- only used in legacy "waypoint" mode
         self.train_radius = self.radius * float(np.linalg.norm(self._LIS_AMP)) * 1.1
 
         self.t = 0.0
@@ -46,28 +60,36 @@ class TrajectoryGenerator:
         self.orientations = []
         self.total_duration = 0.0
         self.anchor = self.center.copy()
+        # EE orientation at reset; the orientation target ramps away from this
+        self.start_orientation = self.down_orientation.copy()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def reset(self, traj_type=None, start_pos=None):
+    def reset(self, traj_type=None, start_pos=None, start_rot=None, randomize=False):
         """
         Sample a new trajectory. Call at the start of each episode.
 
-        start_pos : current end-effector position; the trajectory is anchored
-                    here so the agent starts already on-target.
+        start_pos : current EE position; the curve is anchored here so the
+                    agent starts already on-target.
+        start_rot : current EE rotation matrix; the orientation target ramps
+                    from here to the downward pose.
+        randomize : if True, sample a random Lissajous (training); if False,
+                    use the fixed canonical curve (evaluation).
         """
         self.t = 0.0
         ttype = traj_type or self.traj_type
         self.traj_type = ttype
         self.anchor = (np.array(start_pos, dtype=float)
                        if start_pos is not None else self.center.copy())
+        if start_rot is not None:
+            self.start_orientation = np.array(start_rot, dtype=float)
 
         if ttype == "waypoint":
             self._init_waypoints()
         elif ttype == "lissajous":
-            self._init_lissajous()
+            self._init_lissajous(randomize=randomize)
         else:
             raise ValueError(f"Unknown trajectory type: {ttype}")
 
@@ -82,53 +104,33 @@ class TrajectoryGenerator:
         return self.t >= self.total_duration
 
     # ------------------------------------------------------------------
-    # Waypoint trajectory (training)
+    # Lissajous trajectory (training: randomized; evaluation: fixed)
     # ------------------------------------------------------------------
 
-    def _init_waypoints(self):
-        n = self.n_waypoints
-        # first waypoint is the anchor (current EE) -> no startup gap;
-        # the rest are random points across the eval-curve region
-        self.waypoints = [self.anchor.copy()]
-        self.waypoints += [self._random_workspace_point() for _ in range(n)]
-        # fixed downward orientation at every waypoint -- matches the eval
-        # target and is reachable everywhere, unlike uniformly random poses
-        self.orientations = [self.down_orientation.copy() for _ in range(n + 1)]
-        self.total_duration = n * self.interp_duration
+    def _init_lissajous(self, randomize=False):
+        if randomize:
+            amp_lo, amp_hi = self.train_amp_range
+            frq_lo, frq_hi = self.train_freq_range
+            amps = self.radius * np.random.uniform(amp_lo, amp_hi, size=3)
+            freqs = np.random.uniform(frq_lo, frq_hi, size=3)
+            phases = np.random.uniform(0.0, 2.0 * np.pi, size=3)
+        else:
+            # canonical evaluation curve -- fixed so the eval score stays
+            # comparable across runs (identical to the original eval curve)
+            amps = self.radius * self._LIS_AMP
+            freqs = np.array([1.0, 2.0, 3.0])
+            phases = np.zeros(3)
 
-    def _random_workspace_point(self):
-        """Uniform sample inside a sphere of train_radius around the anchor."""
-        while True:
-            p = np.random.uniform(-1, 1, 3)
-            if np.linalg.norm(p) <= 1.0:
-                return self.anchor + p * self.train_radius
-
-    # ------------------------------------------------------------------
-    # Lissajous trajectory (evaluation)
-    # ------------------------------------------------------------------
-
-    def _init_lissajous(self):
-        # zero phase offsets -> the curve's t=0 point is its own centre, so it
-        # starts exactly on the anchor and stays centred on the training
-        # region (no startup gap, no train/eval spatial offset)
-        ax, ay, az = self.radius * self._LIS_AMP
         self.lis_params = {
-            "Ax": ax, "Ay": ay, "Az": az,
-            "wx": 1.0, "wy": 2.0, "wz": 3.0,
-            "px": 0.0, "py": 0.0, "pz": 0.0,
+            "Ax": amps[0], "Ay": amps[1], "Az": amps[2],
+            "wx": freqs[0], "wy": freqs[1], "wz": freqs[2],
+            "px": phases[0], "py": phases[1], "pz": phases[2],
         }
-        self.lis_center = self.anchor.copy()
-        self.lis_orientation = self.down_orientation
-        self.total_duration = 10.0  # seconds, one full Lissajous cycle
-
-    # ------------------------------------------------------------------
-    # Position
-    # ------------------------------------------------------------------
-
-    def _get_position(self, t):
-        if self.traj_type == "lissajous":
-            return self._lissajous_pos(t)
-        return self._waypoint_pos(t)
+        # shift the centre so the curve's t=0 point lands exactly on the
+        # anchor -- preserves "start on-target" even with random phases
+        start_offset = amps * np.sin(phases)
+        self.lis_center = self.anchor - start_offset
+        self.total_duration = self.lissajous_duration
 
     def _lissajous_pos(self, t):
         p = self.lis_params
@@ -146,6 +148,24 @@ class TrajectoryGenerator:
         vel = (np.array([x2, y2, z2]) - pos) / dt
         return pos, vel
 
+    # ------------------------------------------------------------------
+    # Waypoint trajectory (legacy -- only used if train_type == "waypoint")
+    # ------------------------------------------------------------------
+
+    def _init_waypoints(self):
+        n = self.n_waypoints
+        self.waypoints = [self.anchor.copy()]
+        self.waypoints += [self._random_workspace_point() for _ in range(n)]
+        self.orientations = [self.down_orientation.copy() for _ in range(n + 1)]
+        self.total_duration = n * self.interp_duration
+
+    def _random_workspace_point(self):
+        """Uniform sample inside a sphere of train_radius around the anchor."""
+        while True:
+            p = np.random.uniform(-1, 1, 3)
+            if np.linalg.norm(p) <= 1.0:
+                return self.anchor + p * self.train_radius
+
     def _waypoint_pos(self, t):
         segment = int(t / self.interp_duration)
         segment = min(segment, len(self.waypoints) - 2)
@@ -162,28 +182,43 @@ class TrajectoryGenerator:
         return pos, vel
 
     # ------------------------------------------------------------------
+    # Position dispatch
+    # ------------------------------------------------------------------
+
+    def _get_position(self, t):
+        if self.traj_type == "lissajous":
+            return self._lissajous_pos(t)
+        return self._waypoint_pos(t)
+
+    # ------------------------------------------------------------------
     # Orientation
     # ------------------------------------------------------------------
 
     def _get_orientation(self, t):
-        if self.traj_type == "lissajous":
-            return self.lis_orientation, np.zeros(3)
+        """
+        Orientation target: ramp from the EE's start orientation to the
+        downward pose over `ori_ramp_duration`, then hold downward.
 
-        segment = int(t / self.interp_duration)
-        segment = min(segment, len(self.orientations) - 2)
-        tau = (t - segment * self.interp_duration) / self.interp_duration
+        The ramp removes the startup transient that previously inflated the
+        orientation error -- the episode resets to a home pose whose
+        orientation is far from 'downward', and snapping the target straight
+        to 'downward' forced a large unavoidable error for the first ~1.5 s.
+        Applies to both Lissajous and (legacy) waypoint modes.
+        """
+        if t >= self.ori_ramp_duration:
+            return self.down_orientation, np.zeros(3)
 
-        s = self._min_jerk(tau)
-        R0 = Rotation.from_matrix(self.orientations[segment])
-        R1 = Rotation.from_matrix(self.orientations[segment + 1])
-        R_interp = self._slerp(R0, R1, s)
-        rot_mat = R_interp.as_matrix()
+        R0 = Rotation.from_matrix(self.start_orientation)
+        R1 = Rotation.from_matrix(self.down_orientation)
+
+        s = self._min_jerk(t / self.ori_ramp_duration)
+        rot_mat = self._slerp(R0, R1, s).as_matrix()
 
         # numerical angular velocity
         dt = 1e-4
-        s2 = self._min_jerk(min(tau + dt / self.interp_duration, 1.0))
-        R_next = self._slerp(R0, R1, s2)
-        dR = R_next.as_matrix() @ rot_mat.T
+        s2 = self._min_jerk(min((t + dt) / self.ori_ramp_duration, 1.0))
+        R_next = self._slerp(R0, R1, s2).as_matrix()
+        dR = R_next @ rot_mat.T
         ang_vel = Rotation.from_matrix(dR).as_rotvec() / dt
         return rot_mat, ang_vel
 

@@ -1,7 +1,7 @@
 env:
   robot: "franka"                  # franka | ur5
   control_freq: 20                 # Hz
-  episode_steps: 500
+  episode_steps: 500               # hard cap; Lissajous episodes end earlier (see lissajous_duration)
   max_delta_q: 0.08                # radians per step, action clip
   track_orientation: true
 
@@ -11,33 +11,33 @@ noise:
   joint_pos_std: 0.005             # radians
 
 trajectory:
-  train_type: "waypoint"           # random waypoints during training
-  eval_type: "lissajous"           # lissajous during evaluation
-  n_waypoints: 6                   # for random waypoint mode
-  interp_duration: 2.0             # seconds per segment
+  train_type: "lissajous"          # randomized Lissajous curves for training
+  eval_type: "lissajous"           # fixed canonical Lissajous for evaluation
+  randomize_train: false           # false = train on the exact eval curve; true = randomized curves
   workspace_center: [0.4, 0.0, 0.4]
   workspace_radius: 0.25           # meters
+  lissajous_duration: 10.0         # seconds per episode (one curve)
+  ori_ramp_duration: 1.5           # seconds: ramp orientation start-pose -> downward
+  train_amp_range: [0.3, 1.0]      # per-axis amplitude, as a fraction of workspace_radius
+  train_freq_range: [0.5, 3.0]     # per-axis angular frequency, rad/s
+  # --- legacy waypoint mode (only used if train_type == "waypoint") ---
+  n_waypoints: 6
+  interp_duration: 2.0
 
 reward:
-  alpha: 1.0        # position reward weight
-  beta: 0.05        # smoothness penalty weight
-  gamma: 0.5        # orientation reward weight
-  pos_scale: 0.05   # m   — exp falloff for position reward
-  ori_scale: 0.5    # rad — exp falloff for orientation reward
-  gate_scale: 0.15    # orientation reward fades out as position error grows past ~15 cm
+  beta: 0.03                       # smoothness penalty weight
+  pos_scale: 0.05                  # m   — position reward exp scale (Run A; tighten to 0.05 for Run B)
+  ori_scale: 0.5                   # rad — orientation reward exp scale
 
 training:
-  algorithm: "SAC"
-  total_timesteps: 1_000_000
+  total_timesteps: 2_000_000
   n_envs: 8                        # parallel environments
-  learning_rate: 3.0e-4
-  buffer_size: 1_000_000
-  batch_size: 256
-  gradient_steps: 1               
-  tau: 0.005
-  gamma: 0.99
-  learning_starts: 10_000
-  log_interval: 1000
   save_freq: 50_000
+  log_interval: 1000
   log_dir: "logs/"
   model_dir: "models/"
+  # NOTE: the TQC hyperparameters (learning_rate, buffer_size, gamma,
+  # batch_size, tau, learning_starts, gradient_steps) are set directly in
+  # agent/train.py — they are NOT read from this file. The values there
+  # (lr 1e-4, buffer 400k, gamma 0.98) are the ones that produced the
+  # stable working run; editing them here would have no effect.

@@ -72,12 +72,9 @@ class EETrackingEnv(gym.Env):
 
         # --- reward weights ---
         rw = config["reward"]
-        self.alpha = rw["alpha"]
         self.beta = rw["beta"]
-        self.gamma = rw["gamma"]
         self.pos_scale = rw["pos_scale"]
         self.ori_scale = rw["ori_scale"]
-        self.gate_scale = rw["gate_scale"]
 
         # --- spaces ---
         # ee_pos(3) + ee_ori_6d(6) + target_pos(3) + target_ori_6d(6)
@@ -97,7 +94,6 @@ class EETrackingEnv(gym.Env):
         self._prev_action = np.zeros(self.n_joints)
         self._current_target = None
 
-        # find EE body id (assumes XML has a body named "hand", "link7", etc.)
         self._ee_body_id = self._find_ee_body()
 
     # ------------------------------------------------------------------
@@ -116,11 +112,18 @@ class EETrackingEnv(gym.Env):
         # forward kinematics so xpos / xquat are valid before they are read
         mujoco.mj_forward(self.model, self.data)
 
-        # anchor the trajectory at the current end-effector position, so the
-        # agent starts every episode already on-target (no startup gap)
-        ee_pos, _ = self._get_ee_pose()
+        # Anchor the trajectory at the current EE pose: the position curve
+        # starts on-target, and the orientation target ramps from the EE's
+        # actual start orientation to 'downward' (no startup gap either way).
+        #   training   -> a fresh randomized Lissajous each episode
+        #   evaluation -> the fixed canonical Lissajous benchmark
+        ee_pos, ee_rot = self._get_ee_pose()
         traj_type = "lissajous" if self.eval_mode else None
-        self.trajectory.reset(traj_type=traj_type, start_pos=ee_pos)
+        randomize = (not self.eval_mode) and self.config["trajectory"].get("randomize_train", True)
+        self.trajectory.reset(
+            traj_type=traj_type, start_pos=ee_pos,
+            start_rot=ee_rot, randomize=randomize,
+        )
 
         self._step_count = 0
         self._prev_action = np.zeros(self.n_joints)
@@ -225,16 +228,17 @@ class EETrackingEnv(gym.Env):
         pos_error  = np.linalg.norm(ee_pos - target_pos)
         smoothness = np.linalg.norm(action - self._prev_action)
 
-        r_pos  = np.exp(-pos_error / self.pos_scale)
-        reward = self.alpha * r_pos - self.beta * smoothness
-
+        r_pos = np.exp(-pos_error / self.pos_scale)
         if self.track_orientation:
             ori_error = geodesic_distance(ee_rot, target_rot)
-            r_ori     = np.exp(-ori_error / self.ori_scale)
-            pos_gate  = np.exp(-pos_error / self.gate_scale)   # the new bit
-            reward   += self.gamma * pos_gate * r_ori
+            r_ori = np.exp(-ori_error / self.ori_scale)
+        else:
+            r_ori = 1.0
 
-        return float(reward)
+        # pure product: reward requires BOTH position and orientation to be
+        # good -- abandoning either drives the reward to zero, so there is no
+        # corner solution to exploit.
+        return float(r_pos * r_ori - self.beta * smoothness)
 
     # ------------------------------------------------------------------
     # Info

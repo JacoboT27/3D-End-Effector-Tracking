@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")  # headless: write plots to file, no GUI window
 import matplotlib.pyplot as plt
-from stable_baselines3 import SAC
+from sb3_contrib import TQC
 
 from env.tracking_env import EETrackingEnv
 
@@ -20,20 +20,27 @@ def evaluate(config_path: str, model_path: str, n_episodes: int = 3):
 
     env = EETrackingEnv(config, eval_mode=True)
 
-    model = SAC.load(model_path, env=env)
+    # NOTE: the agent is TQC (sb3-contrib), so it must be loaded with TQC.
+    # Loading a TQC checkpoint with stable_baselines3.SAC is incorrect.
+    model = TQC.load(model_path, env=env)
     print(f"Loaded model from {model_path}")
 
-    all_pos_errors = []
-    all_ori_errors = []
+    # Steps to skip when reporting the "settled" error: the orientation
+    # target ramps in over ori_ramp_duration, so the first chunk of every
+    # episode is an intentional transient and should not dominate the metric.
+    control_freq = config["env"]["control_freq"]
+    ramp = config["trajectory"].get("ori_ramp_duration", 1.5)
+    settle = int(ramp * control_freq) + 5
+
+    all_pos_errors, all_ori_errors = [], []
+    all_pos_settled, all_ori_settled = [], []
 
     for ep in range(n_episodes):
         obs, _ = env.reset()
         done = False
-        ep_pos_errors = []
-        ep_ori_errors = []
+        ep_pos_errors, ep_ori_errors = [], []
 
-        ee_positions = []
-        target_positions = []
+        ee_positions, target_positions = [], []
 
         while not done:
             action, _ = model.predict(obs, deterministic=True)
@@ -49,12 +56,13 @@ def evaluate(config_path: str, model_path: str, n_episodes: int = 3):
             ee_positions.append(ee_pos.copy())
             target_positions.append(target_pos.copy())
 
-        mean_pos = np.mean(ep_pos_errors)
-        mean_ori = np.mean(ep_ori_errors)
         all_pos_errors.extend(ep_pos_errors)
         all_ori_errors.extend(ep_ori_errors)
+        all_pos_settled.extend(ep_pos_errors[settle:])
+        all_ori_settled.extend(ep_ori_errors[settle:])
 
-        print(f"Episode {ep+1}: mean pos error={mean_pos:.4f}m  mean ori error={mean_ori:.4f}rad")
+        print(f"Episode {ep+1}: mean pos error={np.mean(ep_pos_errors):.4f}m  "
+              f"mean ori error={np.mean(ep_ori_errors):.4f}rad")
 
         # plot trajectory for last episode
         if ep == n_episodes - 1:
@@ -65,8 +73,12 @@ def evaluate(config_path: str, model_path: str, n_episodes: int = 3):
                 ep_ori_errors,
             )
 
-    print(f"\nOverall mean pos error : {np.mean(all_pos_errors):.4f} m")
-    print(f"Overall mean ori error : {np.mean(all_ori_errors):.4f} rad")
+    print(f"\nOverall mean pos error  : {np.mean(all_pos_errors):.4f} m")
+    print(f"Overall mean ori error  : {np.mean(all_ori_errors):.4f} rad")
+    print(f"Settled mean pos error  : {np.mean(all_pos_settled):.4f} m   "
+          f"(excludes first {settle} steps)")
+    print(f"Settled mean ori error  : {np.mean(all_ori_settled):.4f} rad "
+          f"(excludes first {settle} steps)")
     env.close()
 
 
