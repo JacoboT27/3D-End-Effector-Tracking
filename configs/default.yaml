@@ -2,7 +2,7 @@ env:
   robot: "franka"                  # franka | ur5
   control_freq: 20                 # Hz
   episode_steps: 500
-  max_delta_q: 0.05                # radians per step, action clip
+  max_delta_q: 0.08                # radians per step, action clip
   track_orientation: true
 
 noise:
@@ -19,11 +19,12 @@ trajectory:
   workspace_radius: 0.25           # meters
 
 reward:
-  alpha: 1.0                       # position tracking weight
-  beta: 0.1                        # smoothness penalty weight
-  gamma: 0.5                       # orientation tracking weight
-  bonus_threshold: 0.02            # meters, for close-to-target bonus
-  bonus_value: 0.5
+  alpha: 1.0        # position reward weight
+  beta: 0.05        # smoothness penalty weight
+  gamma: 0.5        # orientation reward weight
+  pos_scale: 0.05   # m   — exp falloff for position reward
+  ori_scale: 0.5    # rad — exp falloff for orientation reward
+  gate_scale: 0.15    # orientation reward fades out as position error grows past ~15 cm
 
 training:
   algorithm: "SAC"

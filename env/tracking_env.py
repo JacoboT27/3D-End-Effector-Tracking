@@ -75,8 +75,9 @@ class EETrackingEnv(gym.Env):
         self.alpha = rw["alpha"]
         self.beta = rw["beta"]
         self.gamma = rw["gamma"]
-        self.bonus_threshold = rw["bonus_threshold"]
-        self.bonus_value = rw["bonus_value"]
+        self.pos_scale = rw["pos_scale"]
+        self.ori_scale = rw["ori_scale"]
+        self.gate_scale = rw["gate_scale"]
 
         # --- spaces ---
         # ee_pos(3) + ee_ori_6d(6) + target_pos(3) + target_ori_6d(6)
@@ -221,22 +222,17 @@ class EETrackingEnv(gym.Env):
         ee_pos, ee_rot = self._get_ee_pose()
         target_pos, _, target_rot, _ = self._current_target
 
-        # position tracking error
-        pos_error = np.linalg.norm(ee_pos - target_pos)
-
-        # smoothness penalty
+        pos_error  = np.linalg.norm(ee_pos - target_pos)
         smoothness = np.linalg.norm(action - self._prev_action)
 
-        reward = -self.alpha * pos_error - self.beta * smoothness
+        r_pos  = np.exp(-pos_error / self.pos_scale)
+        reward = self.alpha * r_pos - self.beta * smoothness
 
-        # orientation tracking
         if self.track_orientation:
             ori_error = geodesic_distance(ee_rot, target_rot)
-            reward -= self.gamma * ori_error
-
-        # close-to-target bonus
-        if pos_error < self.bonus_threshold:
-            reward += self.bonus_value
+            r_ori     = np.exp(-ori_error / self.ori_scale)
+            pos_gate  = np.exp(-pos_error / self.gate_scale)   # the new bit
+            reward   += self.gamma * pos_gate * r_ori
 
         return float(reward)
 

@@ -2,7 +2,6 @@ import os
 import yaml
 import argparse
 
-from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 from stable_baselines3.common.callbacks import (
     CheckpointCallback,
@@ -11,7 +10,7 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
-
+from sb3_contrib import TQC
 from env.tracking_env import EETrackingEnv
 
 
@@ -54,7 +53,7 @@ def train(config_path: str):
 
     # --- early stopping: halt once eval reward stops improving ---
     stop_cb = StopTrainingOnNoModelImprovement(
-        max_no_improvement_evals=train_cfg.get("early_stop_patience", 10),
+        max_no_improvement_evals=train_cfg.get("early_stop_patience", 30),
         min_evals=train_cfg.get("early_stop_min_evals", 20),
         verbose=1,
     )
@@ -77,16 +76,16 @@ def train(config_path: str):
     )
 
     # --- SAC agent ---
-    model = SAC(
+    model = TQC(
         policy="MlpPolicy",
         env=train_env,
-        learning_rate=train_cfg["learning_rate"],
-        buffer_size=train_cfg["buffer_size"],
-        batch_size=train_cfg["batch_size"],
-        tau=train_cfg["tau"],
-        gamma=train_cfg["gamma"],
-        learning_starts=train_cfg["learning_starts"],
-        gradient_steps=train_cfg["gradient_steps"],
+        learning_rate=1e-4,         
+        buffer_size=400_000,         
+        batch_size=256,
+        tau=0.005,
+        gamma=0.98,                  
+        learning_starts=10_000,
+        gradient_steps=1,
         verbose=1,
     )
 

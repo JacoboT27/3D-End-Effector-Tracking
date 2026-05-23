@@ -74,10 +74,13 @@ docker compose up train
 # alternatively, you can build the image and train
 docker compose up --build train
 
-# 4. evaluate once training is done
+# 4. Obtain Training curves
+docker compose run --rm evaluate python -m agent.plot_training
+
+# 5. evaluate once training is done
 docker compose up evaluate
 
-# 4. watch the trained policy in the MuJoCo viewer
+# 6. watch the trained policy in the MuJoCo viewer
 xhost +local:                # once per session, grants the container the display
 docker compose up viewer
 ```
