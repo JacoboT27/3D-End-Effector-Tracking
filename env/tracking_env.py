@@ -118,11 +118,11 @@ class EETrackingEnv(gym.Env):
         #   training   -> a fresh randomized Lissajous each episode
         #   evaluation -> the fixed canonical Lissajous benchmark
         ee_pos, ee_rot = self._get_ee_pose()
-        traj_type = "lissajous" if self.eval_mode else None
-        randomize = (not self.eval_mode) and self.config["trajectory"].get("randomize_train", True)
+        traj_cfg = self.config["trajectory"]
+        traj_type = traj_cfg["eval_type"] if self.eval_mode else traj_cfg["train_type"]
         self.trajectory.reset(
             traj_type=traj_type, start_pos=ee_pos,
-            start_rot=ee_rot, randomize=randomize,
+            start_rot=ee_rot, randomize=not self.eval_mode,
         )
 
         self._step_count = 0

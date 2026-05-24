@@ -6,10 +6,16 @@ class TrajectoryGenerator:
     """
     Generates end-effector trajectories for training and evaluation.
 
-    Training:   randomized Lissajous curves -- a fresh curve every episode,
-                with random per-axis amplitude, frequency and phase.
-    Evaluation: a single fixed ("canonical") Lissajous curve, so the eval
-                score is a stable, comparable benchmark across runs.
+    Training:   randomized curves -- a fresh curve every episode.
+    Evaluation: a single fixed ("canonical") curve, so the eval score is a
+                stable, comparable benchmark across runs.
+
+    The curve family is selected by `train_type` / `eval_type` in the config:
+      "lissajous" -- a 3D Lissajous figure (random amplitude/frequency/phase
+                     for training; fixed canonical curve for evaluation).
+      "circle"    -- a horizontal circle with a sinusoidal vertical undulation
+                     (top view: a circle; side view: a sine wave) -- a
+                     "crown" shape. Training randomizes its size/lobes.
 
     Training on randomized Lissajous curves (rather than slow random
     waypoints) closes the train/eval gap: the agent practices the same
@@ -50,6 +56,16 @@ class TrajectoryGenerator:
         # per-axis randomization ranges for *training* curves
         self.train_amp_range = traj_cfg.get("train_amp_range", [0.3, 1.0])
         self.train_freq_range = traj_cfg.get("train_freq_range", [0.5, 3.0])
+
+        # --- circular / "crown" trajectory settings ---
+        # circle in the horizontal plane + sinusoidal vertical undulation.
+        # The circle_* values define the fixed evaluation curve; training
+        # randomizes the size and lobe count around them.
+        self.circle_duration = traj_cfg.get("circle_duration", 10.0)
+        self.circle_radius = traj_cfg.get("circle_radius", 0.15)
+        self.circle_height_amp = traj_cfg.get("circle_height_amp", 0.08)
+        self.circle_lobes = int(traj_cfg.get("circle_lobes", 3))
+        self.circle_loops = int(traj_cfg.get("circle_loops", 1))
 
         # curve placement: shift every curve (train + eval) into the region
         # where the EE can point straight down; eval_amp_scale additionally
@@ -109,6 +125,8 @@ class TrajectoryGenerator:
             self._init_waypoints()
         elif ttype == "lissajous":
             self._init_lissajous(randomize=randomize)
+        elif ttype == "circle":
+            self._init_circle(randomize=randomize)
         else:
             raise ValueError(f"Unknown trajectory type: {ttype}")
 
@@ -171,6 +189,62 @@ class TrajectoryGenerator:
         return pos, vel
 
     # ------------------------------------------------------------------
+    # Circular "crown" trajectory (training: randomized; evaluation: fixed)
+    # ------------------------------------------------------------------
+
+    def _init_circle(self, randomize=False):
+        """Circle in the horizontal plane with a sinusoidal vertical
+        undulation -- top view a circle, side view a sine wave (a "crown").
+
+            x = cx + R*cos(theta)
+            y = cy + R*sin(theta)
+            z = cz + A*sin(k*theta)
+            theta = theta0 + omega*t
+
+        Training randomizes the radius, height, lobe count and start phase;
+        evaluation uses the fixed circle_* values from the config.
+        """
+        if randomize:
+            amp_lo, amp_hi = self.train_amp_range
+            R = self.radius * np.random.uniform(amp_lo, amp_hi)
+            A = self.radius * 0.4 * np.random.uniform(amp_lo, amp_hi)
+            k = int(np.random.randint(2, 6))            # 2-5 crown lobes
+            theta0 = np.random.uniform(0.0, 2.0 * np.pi)
+        else:
+            R = self.circle_radius
+            A = self.circle_height_amp
+            k = self.circle_lobes
+            theta0 = 0.0
+
+        omega = 2.0 * np.pi * self.circle_loops / self.circle_duration
+        self.circle_params = {
+            "R": R, "A": A, "k": k, "omega": omega, "theta0": theta0,
+        }
+        # centre the circle at (anchor + curve_center_offset); the startup
+        # ramp eases the target from the EE's reset pose onto the rim, so
+        # there is no positional jump at episode start
+        self.circle_center = self.anchor + self.curve_center_offset
+        self.total_duration = self.circle_duration
+
+    def _circle_pos(self, t):
+        p = self.circle_params
+        c = self.circle_center
+        w, k = p["omega"], p["k"]
+        th = p["theta0"] + w * t
+        pos = c + np.array([
+            p["R"] * np.cos(th),
+            p["R"] * np.sin(th),
+            p["A"] * np.sin(k * th),
+        ])
+        # analytic velocity (theta advances at constant omega)
+        vel = np.array([
+            -p["R"] * w * np.sin(th),
+            p["R"] * w * np.cos(th),
+            p["A"] * k * w * np.cos(k * th),
+        ])
+        return pos, vel
+
+    # ------------------------------------------------------------------
     # Waypoint trajectory (legacy -- only used if train_type == "waypoint")
     # ------------------------------------------------------------------
 
@@ -210,6 +284,8 @@ class TrajectoryGenerator:
     def _get_position(self, t):
         if self.traj_type == "lissajous":
             return self._lissajous_pos(t)
+        if self.traj_type == "circle":
+            return self._circle_pos(t)
         return self._waypoint_pos(t)
 
     def _startup_position_ramp(self, t, pos, vel):

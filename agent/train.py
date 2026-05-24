@@ -15,6 +15,33 @@ from sb3_contrib import TQC
 from env.tracking_env import EETrackingEnv
 
 
+class NamedEvalCallback(EvalCallback):
+    """EvalCallback that saves the best model under a chosen filename.
+
+    SB3's EvalCallback always names the best model 'best_model.zip', so a
+    second trajectory demo would overwrite the first. This subclass renames
+    the file to `best_model_name` after each new best is saved, letting e.g.
+    best_model.zip and best_model_circular.zip coexist in models/best/.
+    """
+
+    def __init__(self, *args, best_model_name="best_model", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.best_model_name = best_model_name
+
+    def _on_step(self):
+        prev_best = self.best_mean_reward
+        keep_going = super()._on_step()
+        if (self.best_model_save_path is not None
+                and self.best_mean_reward > prev_best
+                and self.best_model_name != "best_model"):
+            src = os.path.join(self.best_model_save_path, "best_model.zip")
+            dst = os.path.join(self.best_model_save_path,
+                               f"{self.best_model_name}.zip")
+            if os.path.exists(src):
+                os.replace(src, dst)
+        return keep_going
+
+
 def load_config(path: str) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
@@ -29,8 +56,17 @@ def make_env(config: dict, rank: int, eval_mode: bool = False):
     return _init
 
 
-def train(config_path: str, resume_path: str = None):
+def train(config_path: str, resume_path: str = None, trajectory: str = None):
     config = load_config(config_path)
+
+    # optional curve-family override (--trajectory): applies to train + eval
+    if trajectory is not None:
+        config["trajectory"]["train_type"] = trajectory
+        config["trajectory"]["eval_type"] = trajectory
+    traj_type = config["trajectory"]["train_type"]
+    # tag so the lissajous and circle demos don't overwrite each other's files
+    tag = "_circular" if traj_type == "circle" else ""
+
     train_cfg = config["training"]
 
     log_dir = train_cfg["log_dir"]
@@ -48,6 +84,8 @@ def train(config_path: str, resume_path: str = None):
     eval_env = DummyVecEnv([make_env(config, 0, eval_mode=True)])
     eval_env = VecMonitor(eval_env)
 
+    # eval_freq is counted in agent steps; divide the desired timestep
+    # interval by n_envs, since the vec env advances n_envs timesteps per step
     eval_freq = max(train_cfg.get("eval_freq", 10_000) // n_envs, 1)
 
     # --- early stopping: halt once eval reward stops improving ---
@@ -61,11 +99,12 @@ def train(config_path: str, resume_path: str = None):
     checkpoint_cb = CheckpointCallback(
         save_freq=max(train_cfg["save_freq"] // n_envs, 1),
         save_path=model_dir,
-        name_prefix="tqc_ee_tracking",
+        name_prefix=f"tqc_ee_tracking{tag}",
     )
-    eval_cb = EvalCallback(
+    eval_cb = NamedEvalCallback(
         eval_env,
         best_model_save_path=os.path.join(model_dir, "best"),
+        best_model_name=f"best_model{tag}",     # best_model[_circular].zip
         log_path=log_dir,                       # writes evaluations.npz
         eval_freq=eval_freq,
         n_eval_episodes=train_cfg.get("n_eval_episodes", 5),
@@ -75,8 +114,13 @@ def train(config_path: str, resume_path: str = None):
     )
 
     # --- TQC agent ---
+    # Hyperparameters are set HERE on purpose (not read from the YAML):
+    # these are the values that produced the stable, working run.
     if resume_path:
-        # warm-start: load an existing policy/critic and keep training used for the pos_scale-tightening polish run 
+        # warm-start: load an existing policy/critic and keep training.
+        # used for the pos_scale-tightening polish run -- the loaded model
+        # is already inside the tracking basin, so a sharper reward just
+        # pulls it tighter rather than risking a cold-start failure.
         print(f"Warm-starting from: {resume_path}")
         model = TQC.load(resume_path, env=train_env)
     else:
@@ -90,10 +134,11 @@ def train(config_path: str, resume_path: str = None):
             gamma=0.98,
             learning_starts=10_000,
             gradient_steps=1,
-            #policy_kwargs=dict(net_arch=[400, 300]),
             verbose=1,
         )
 
+    # log to stdout + CSV + TensorBoard, all under log_dir.
+    # progress.csv is what plot_training.py reads to draw the curves.
     model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
     print("Starting training...")
@@ -103,7 +148,7 @@ def train(config_path: str, resume_path: str = None):
         log_interval=train_cfg["log_interval"],
     )
 
-    final_path = os.path.join(model_dir, "tqc_ee_tracking_final")
+    final_path = os.path.join(model_dir, f"tqc_ee_tracking_final{tag}")
     model.save(final_path)
     print(f"Training complete. Model saved to {final_path}")
 
@@ -119,5 +164,11 @@ if __name__ == "__main__":
         help="path to a saved model to warm-start from, "
              "e.g. models/best/best_model",
     )
+    parser.add_argument(
+        "--trajectory", type=str, default=None,
+        choices=["lissajous", "circle"],
+        help="curve family for this run (overrides train_type/eval_type in "
+             "the config); 'circle' saves the best model as best_model_circular",
+    )
     args = parser.parse_args()
-    train(args.config, resume_path=args.resume)
+    train(args.config, resume_path=args.resume, trajectory=args.trajectory)

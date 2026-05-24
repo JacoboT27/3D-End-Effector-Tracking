@@ -15,12 +15,18 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def evaluate(config_path: str, model_path: str, n_episodes: int = 3):
+def evaluate(config_path: str, model_path: str, n_episodes: int = 3,
+             trajectory: str = None):
     config = load_config(config_path)
+
+    # optional curve-family override (--trajectory)
+    if trajectory is not None:
+        config["trajectory"]["eval_type"] = trajectory
 
     env = EETrackingEnv(config, eval_mode=True)
 
     # NOTE: the agent is TQC (sb3-contrib), so it must be loaded with TQC.
+    # Loading a TQC checkpoint with stable_baselines3.SAC is incorrect.
     model = TQC.load(model_path, env=env)
     print(f"Loaded model from {model_path}")
 
@@ -122,8 +128,23 @@ def _plot_trajectory(ee_pos, target_pos, pos_errors, ori_errors):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="configs/default.yaml")
-    parser.add_argument("--model", type=str, default="models/best/best_model")
+    parser.add_argument(
+        "--trajectory", type=str, default=None,
+        choices=["lissajous", "circle"],
+        help="curve family to evaluate on (overrides eval_type in the config)",
+    )
+    parser.add_argument(
+        "--model", type=str, default=None,
+        help="path to the model; defaults to models/best/best_model, or "
+             "models/best/best_model_circular when --trajectory circle",
+    )
     parser.add_argument("--episodes", type=int, default=3)
     args = parser.parse_args()
 
-    evaluate(args.config, args.model, args.episodes)
+    model_path = args.model
+    if model_path is None:
+        model_path = ("models/best/best_model_circular"
+                      if args.trajectory == "circle"
+                      else "models/best/best_model")
+
+    evaluate(args.config, model_path, args.episodes, trajectory=args.trajectory)

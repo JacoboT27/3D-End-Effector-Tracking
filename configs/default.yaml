@@ -11,17 +11,21 @@ noise:
   joint_pos_std: 0.005             # radians
 
 trajectory:
-  train_type: "lissajous"          # randomized Lissajous curves for training
-  eval_type: "lissajous"           # fixed canonical Lissajous for evaluation
-  randomize_train: false           # false = train on the exact eval curve; true = randomized curves
+  train_type: "lissajous"          # curve family for training: "lissajous" or "circle"
+  eval_type: "lissajous"           # curve family for evaluation: "lissajous" or "circle"
   workspace_center: [0.4, 0.0, 0.4]
   workspace_radius: 0.25           # meters
-  lissajous_duration: 15.0         # seconds per episode (one curve)
-  ori_ramp_duration: 1.5           # seconds: ramp orientation start-pose -> downward
+  lissajous_duration: 10.0         # seconds per episode (one curve)
+  ori_ramp_duration: 1.5           # seconds: startup ramp (orientation AND position) onto the curve
   train_amp_range: [0.3, 1.0]      # per-axis amplitude, as a fraction of workspace_radius
   train_freq_range: [0.5, 3.0]     # per-axis angular frequency, rad/s
   curve_center_offset: [-0.10, 0.0, -0.10]   # meters [dx, dy, dz], applied to all curves
   eval_amp_scale: 0.90                       # shrink the canonical eval curve to 90%
+  circle_duration: 10.0            # seconds per episode (one curve)
+  circle_radius: 0.15              # meters, circle radius (top-view)
+  circle_height_amp: 0.08          # meters, vertical sine amplitude (crown undulation)
+  circle_lobes: 3                  # up/down lobes per revolution (number of crown points)
+  circle_loops: 1                  # revolutions per episode
   n_waypoints: 6
   interp_duration: 2.0
 
