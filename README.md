@@ -15,19 +15,26 @@ A TQC agent observes the noisy state of the arm and the (clean) state of the tar
 - **Simulator** — MuJoCo 3.x, Franka Emika Panda 7-DOF arm, wrapped as a Gymnasium environment.
 - **Control** — joint position actuators driven by delta-angle commands.
 - **Agent** — TQC (sb3-contrib): off-policy, distributional actor-critic, with a 400k-transition replay buffer.
-- **Training targets** — randomized Lissajous curves, re-sampled every episode (random per-axis amplitude, frequency and phase).
-- **Evaluation target** — a single fixed ("canonical") Lissajous curve, so the eval score is a stable, comparable benchmark across runs.
+- **Training targets** —  Lissajous curve.
+- **Evaluation target** — a fixed Lissajous curve, so the eval score is a stable, comparable benchmark across runs.
 - **Uncertainty source** — Gaussian noise on the observed end-effector pose and joint angles.
 
 ---
 
 ## Results
 
+**Demo of the final policy following the evaluation trajectory**
+![Project Demo](examples/demo.gif)
+
+Training lasted for ~4M timesteps, until the evaluation reward plateaud. This is confirmed by the following plots. Training reward kept steadily climbing, and the actor-critic losses show a good behaviour. 
 ![input](examples/training.png)
 
-The agent learns stable sub-centimetre position tracking on the canonical Lissajous benchmark. Run `agent/evaluate.py` after training for the full position/orientation error breakdown (it reports a "settled" error that skips the startup ramp).
+The best policy obtained from training was evaluated using a 3D Lissajous curve, to demstrate full capabilities of the agent. 
 
 ![input](examples/evaluation.png)
+
+Final result shows  a mean error of 1cm and 0.08 rad across the trajectory. Main source of error was right after the crossing in the middle fo the trajectory. At that specific point, the agent has trouble differentiating which way it is going to, and where it is coming from, so it separates from the target. A few steps later, it converges again. 
+
 
 ---
 
@@ -35,31 +42,17 @@ The agent learns stable sub-centimetre position tracking on the canonical Lissaj
 
 ### Joint-space delta control, with implicit inverse kinematics
 
-The agent outputs **delta joint angles** (Δq) — small per-joint changes, capped at `max_delta_q` each step. Two alternatives were rejected. *Cartesian deltas plus an IK solver* would make the RL problem trivial: the inverse-kinematics solver already does the hard geometric work, so the agent would behave only as a filter. *Direct joint-torque control* would force the agent to also learn low-level dynamics, which is outside the scope here.
-
-The agent must discover the arm's kinematics purely from experience, while MuJoCo's built-in PD controller handles the dynamics of reaching each commanded angle. The trained policy is the task-specific inverse-kinematics controller.
+The agent outputs **delta joint angles** (Δq) — small per-joint changes, capped at `max_delta_q` each step. The agent learns the arm's kinematics purely from experience, while MuJoCo's built-in PD controller handles the dynamics of reaching each commanded angle. The trained policy is the task-specific inverse-kinematics controller.
 
 ### Truncated Quantile Critics (TQC)
 
-The learner is TQC, an off-policy actor-critic algorithm. Like SAC it stores every transition in a replay buffer and reuses it for many gradient updates, which is sample-efficient — the right property when the simulator runs on CPU with 8 parallel environments. Unlike SAC, TQC represents each critic as a *distribution* over returns and truncates the top quantiles when forming the target, which controls the value-overestimation bias.
-
-Plain SAC was tried first; on this task its critics overestimated and diverged, destabilizing training. Switching to TQC removed that failure mode and produced the stable runs.
+TQC is an off-policy actor-critic algorithm. It stores every transition in a replay buffer and reuses it for many gradient updates, which is sample-efficient, making it ideal when the simulator runs on CPU with 8 parallel environments. TQC represents each critic as a *distribution* over returns and truncates the top quantiles when forming the target, which controls the value-overestimation bias.
 
 ### Lissajous trajectories, randomized for training
 
 **Training** re-samples a fresh **randomized Lissajous curve** every episode — random per-axis amplitude, frequency and phase. Re-randomizing every episode forces the agent to learn tracking as a genuine skill rather than memorize one path.
 
 **Evaluation** uses a single fixed **canonical Lissajous curve**. Because training already covers the same family of motion (and the same speeds), the eval curve is in-distribution, and the eval score is a stable, comparable benchmark across runs rather than a noisy out-of-distribution probe.
-
-Both train and eval curves are placed relative to the end-effector's reset position and shifted by `curve_center_offset` (see *Workspace feasibility* below). A legacy random-waypoint mode with minimum-jerk interpolation is still available via `train_type: "waypoint"`.
-
-### Startup ramps
-
-At the start of each episode both the **position and orientation targets ramp smoothly onto the curve** over `ori_ramp_duration` seconds — position from the EE's reset location, orientation from its reset pose to the downward pose. Snapping the target straight onto a relocated, downward-pointing curve would otherwise force a large unavoidable error for the first ~1.5 s; the min-jerk ramps remove that startup transient.
-
-### Workspace feasibility
-
-The downward end-effector orientation cannot be achieved everywhere in the arm's reach: pointing straight down costs horizontal reach, so the far parts of a large curve become infeasible in 6-DOF pose even though the positions alone are reachable. `agent/reachability_check.py` (inverse-kinematics feasibility) and `agent/manipulability_check.py` (Yoshikawa manipulability) characterize this. `curve_center_offset` and `eval_amp_scale` relocate and scale the curve so it stays inside the region where the EE can point down along its whole length.
 
 ### Orientation: 6D representation and geodesic error
 
@@ -160,7 +153,7 @@ A flat vector. `n` is the number of arm joints — 7 for Franka, 6 for UR5e — 
 
 ## Reward function
 
-At every step the agent receives a scalar reward built from two exponential "closeness" terms — one for position, one for orientation — **multiplied together**, minus a smoothness penalty:
+At every step the agent receives a scalar reward built from two exponential terms, position and orientation, multiplied together, minus a smoothness penalty:
 
 ```
 r = exp(−‖p_ee − p_target‖ / pos_scale)        position closeness    ∈ (0, 1]
@@ -168,13 +161,13 @@ r = exp(−‖p_ee − p_target‖ / pos_scale)        position closeness    ∈
   − β · ‖aₜ − aₜ₋₁‖                             smoothness penalty
 ```
 
-**Pure product, not a weighted sum.** Each closeness term is 1 when its error is zero and decays toward 0 as the error grows. Because they are *multiplied*, the agent must get **both** position and orientation right — letting either error grow drives the whole reward toward zero. This removes the corner solution a weighted sum of penalties allows, where the agent nails position and quietly ignores orientation.
+**Pure product:** Each closeness term is 1 when its error is zero and decays toward 0 as the error grows. Because they are multiplied, the agent must get **both** position and orientation right. This avoids the situation of the agent maximizing one while ignoring the other term. 
 
-**`pos_scale` / `ori_scale`** — the exponential decay scales of the two terms (metres and radians). Smaller values make the reward sharper, demanding tighter tracking before it pays out.
+**`pos_scale`, `ori_scale`:** The exponential decay scales of the two terms (metres and radians). Smaller values make the reward sharper, demanding tighter tracking before it pays out.
 
-**Smoothness penalty (`β`)** — the magnitude of the change in action between consecutive steps, discouraging jittery commands.
+**Smoothness penalty (`β`):** The magnitude of the change in action between consecutive steps, discouraging jittery commands.
 
-**Scale.** A policy that tracks well sits near +1 per step (both closeness terms near 1, minus a small smoothness penalty); a poor one sits near 0. Watching the mean episode reward climb is the clearest sign that training is working.
+**Scale.** A policy that tracks well sits near +1 per step (both closeness terms near 1, minus a small smoothness penalty); a poor one sits near 0. Watching the mean episode reward climb towards 299 (episode length) is a sign that training is working.
 
 The three knobs (`beta`, `pos_scale`, `ori_scale`) are set under `reward` in `configs/default.yaml`.
 
