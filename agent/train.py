@@ -81,13 +81,13 @@ def train(config_path: str, resume_path: str = None, trajectory: str = None):
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    # --- training environments (randomized Lissajous curves) ---
+    # --- training environments (randomized curves of the chosen family) ---
     n_envs = train_cfg["n_envs"]
     print(f"Creating {n_envs} training environments...")
     train_env = DummyVecEnv([make_env(config, i) for i in range(n_envs)])
     train_env = VecMonitor(train_env)
 
-    # --- single eval environment (fixed canonical Lissajous) ---
+    # --- single eval environment (fixed canonical curve) ---
     eval_env = DummyVecEnv([make_env(config, 0, eval_mode=True)])
     eval_env = VecMonitor(eval_env)
 
@@ -124,10 +124,8 @@ def train(config_path: str, resume_path: str = None, trajectory: str = None):
     # Hyperparameters are set HERE on purpose (not read from the YAML):
     # these are the values that produced the stable, working run.
     if resume_path:
-        # warm-start: load an existing policy/critic and keep training.
-        # used for the pos_scale-tightening polish run -- the loaded model
-        # is already inside the tracking basin, so a sharper reward just
-        # pulls it tighter rather than risking a cold-start failure.
+        # warm-start: load an existing policy/critic and keep training
+        # (e.g. to continue a run or fine-tune with a changed reward).
         print(f"Warm-starting from: {resume_path}")
         model = TQC.load(resume_path, env=train_env)
     else:

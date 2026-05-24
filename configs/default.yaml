@@ -15,7 +15,7 @@ trajectory:
   eval_type: "lissajous"           # curve family for evaluation: "lissajous" or "circle"
   workspace_center: [0.4, 0.0, 0.4]
   workspace_radius: 0.25           # meters
-  lissajous_duration: 10.0         # seconds per episode (one curve)
+  lissajous_duration: 15.0         # seconds per episode (one curve)
   ori_ramp_duration: 1.5           # seconds: startup ramp (orientation AND position) onto the curve
   train_amp_range: [0.3, 1.0]      # per-axis amplitude, as a fraction of workspace_radius
   train_freq_range: [0.5, 3.0]     # per-axis angular frequency, rad/s
@@ -30,8 +30,14 @@ trajectory:
   interp_duration: 2.0
 
 reward:
-  beta: 0.03                       # smoothness penalty weight
-  pos_scale: 0.05                  # m   — position reward exp scale (Run A; tighten to 0.05 for Run B)
+  beta: 0.06                       # smoothness penalty weight: penalises
+                                   # change-in-action between steps. Raised
+                                   # from 0.03 -- at 0.03 the penalty was only
+                                   # ~3% of per-step reward, too weak to
+                                   # discourage jittery actions. Tune up
+                                   # (0.08-0.12) for a smoother path, down if
+                                   # tracking becomes sluggish.
+  pos_scale: 0.05                  # m   — position reward exp scale
   ori_scale: 0.5                   # rad — orientation reward exp scale
 
 training:
@@ -39,5 +45,15 @@ training:
   n_envs: 8                        # parallel environments
   save_freq: 50_000
   log_interval: 1000
+  eval_freq: 10_000                # timesteps between evaluations
+  n_eval_episodes: 10              # episodes averaged per eval; higher = less
+                                   # noisy eval reward (the env adds observation
+                                   # noise, so a 5-episode mean is jumpy and can
+                                   # make a still-improving run look plateaued)
+  early_stop_patience: 45          # stop only after this many evals set no new
+                                   # best; 30 was aggressive enough to cut the
+                                   # circle run at ~1.3M while it was still
+                                   # improving -- 60 tolerates longer plateaus
+  early_stop_min_evals: 30         # never allow early-stop before this many evals
   log_dir: "logs/"
   model_dir: "models/"

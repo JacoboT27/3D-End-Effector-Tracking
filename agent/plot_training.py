@@ -43,7 +43,7 @@ def column(rows, x_key, y_key):
     return np.array(xs), np.array(ys)
 
 
-def plot_training(log_dir):
+def plot_training(log_dir, trajectory=None):
     evals = read_eval_npz(log_dir)
     rows = read_progress_csv(log_dir)
 
@@ -52,6 +52,12 @@ def plot_training(log_dir):
     if not panels:
         print(f"No logs found in {log_dir} (need evaluations.npz or progress.csv).")
         return
+
+    # the logs do not record which curve was trained, so the trajectory name
+    # is only used to label the plot; pass --trajectory to make it explicit
+    eval_title = ("Evaluation reward"
+                  if trajectory is None
+                  else f"Evaluation reward ({trajectory})")
 
     fig, axes = plt.subplots(1, len(panels), figsize=(6 * len(panels), 4.5))
     if len(panels) == 1:
@@ -62,7 +68,7 @@ def plot_training(log_dir):
             t, m, s = evals
             ax.plot(t, m, color="tab:blue", label="eval mean reward")
             ax.fill_between(t, m - s, m + s, color="tab:blue", alpha=0.2)
-            ax.set_title("Evaluation reward (Lissajous)")
+            ax.set_title(eval_title)
             ax.set_xlabel("Timesteps")
             ax.set_ylabel("Episode reward")
             ax.legend()
@@ -101,5 +107,10 @@ def plot_training(log_dir):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--logdir", type=str, default="logs")
+    parser.add_argument(
+        "--trajectory", type=str, default=None,
+        choices=["lissajous", "circle"],
+        help="curve family of this run; only used to label the eval plot",
+    )
     args = parser.parse_args()
-    plot_training(args.logdir)
+    plot_training(args.logdir, trajectory=args.trajectory)

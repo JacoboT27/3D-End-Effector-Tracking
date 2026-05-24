@@ -76,6 +76,7 @@ def evaluate(config_path: str, model_path: str, n_episodes: int = 3,
                 np.array(target_positions),
                 ep_pos_errors,
                 ep_ori_errors,
+                curve_name=config["trajectory"]["eval_type"],
             )
 
     print(f"\nOverall mean pos error  : {np.mean(all_pos_errors):.4f} m")
@@ -87,13 +88,14 @@ def evaluate(config_path: str, model_path: str, n_episodes: int = 3,
     env.close()
 
 
-def _plot_trajectory(ee_pos, target_pos, pos_errors, ori_errors):
+def _plot_trajectory(ee_pos, target_pos, pos_errors, ori_errors,
+                     curve_name="trajectory"):
     fig = plt.figure(figsize=(14, 5))
 
     # 3D trajectory
     ax1 = fig.add_subplot(131, projection="3d")
     ax1.plot(target_pos[:, 0], target_pos[:, 1], target_pos[:, 2],
-             "b--", linewidth=1.5, label="Target (Lissajous)")
+             "b--", linewidth=1.5, label=f"Target ({curve_name})")
     ax1.plot(ee_pos[:, 0], ee_pos[:, 1], ee_pos[:, 2],
              "r-", linewidth=1.5, label="EE actual")
     ax1.set_title("3D Trajectory")

@@ -26,12 +26,21 @@ A TQC agent observes the noisy state of the arm and the (clean) state of the tar
 **Demo of the final policy following the evaluation trajectory**
 | Circular Helix| Lissajous |
 |---|---|
-|![Project Demo](examples/lissajous_demo.gif) | ![Project Demo](examples/lissajous_demo.gif) |
+|![Project Demo](examples/helix_controller.gif) | ![Project Demo](examples/lissajous_demo.gif) |
 
 **Circular Helix Training**
 
+Training lasted for ~2.8M timesteps, until a plateau was detected on the evaluation reward curve, meaning no further training was required. Plot shows also a plateau on the reward curve. 
+![input](examples/helix_training.png)
+
+The best policy obtained from training was evaluated using a 3D circular helix curve, to demstrate full capabilities of the agent. 
+![input](examples/helix_evaluation.png)
+
+Final results show a mean error of 6mm in position tracking, and 0.057rad in orientation tracking. 
+
 **Lissajous Training**
-Training lasted for ~4M timesteps, until the evaluation reward plateaud. This is confirmed by the following plots. Training reward kept steadily climbing, and the actor-critic losses show a good behaviour. 
+
+Training lasted for ~4M timesteps, until the evaluation reward plateaued. This is confirmed by the following plots. Training reward kept steadily climbing, and the actor-critic losses show a good behaviour. 
 ![input](examples/lissajous_training.png)
 
 The best policy obtained from training was evaluated using a 3D Lissajous curve, to demstrate full capabilities of the agent. 
@@ -75,65 +84,6 @@ The observation also includes the arm's own **joint velocities**. A position-con
 
 ---
 
-## Setup
-
-The Docker image carries all dependencies. The robot model files are downloaded separately.
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/JacoboT27/3D-End-Effector-Tracking.git
-cd 3D-End-Effector-Tracking
-
-# 2. Run script to download robot model files (XML + meshes) into assets/
-bash scripts/download_assets.sh
-
-# 3. pull the image and train
-docker compose pull
-docker compose up train
-
-# alternatively, you can build the image and train
-docker compose up --build train
-
-# 4. Obtain training curves
-docker compose run --rm evaluate python -m agent.plot_training
-
-# 5. evaluate once training is done
-docker compose up evaluate
-
-# 6. watch the trained policy in the MuJoCo viewer
-xhost +local:                # once per session, grants the container the display
-docker compose up viewer
-```
-
-**Warm-starting.** `train.py` accepts `--resume <model>` to continue training from an existing checkpoint instead of starting fresh — useful after a config change (e.g. a new curve placement), since the tracking skill transfers and only needs to adapt:
-
-```bash
-docker compose run --rm train python agent/train.py --config configs/default.yaml --resume models/best/best_model
-```
-
-**Workspace analysis.** The kinematic feasibility of the eval curve can be checked directly:
-
-```bash
-docker compose run --rm evaluate python agent/reachability_check.py
-docker compose run --rm evaluate python agent/manipulability_check.py
-```
-
-## Local setup (no Docker)
-
-```bash
-git clone https://github.com/JacoboT27/3D-End-Effector-Tracking.git
-cd 3D-End-Effector-Tracking
-bash scripts/download_assets.sh
-
-# install the CPU build of PyTorch first
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
-
-python -m agent.train --config configs/default.yaml
-python -m agent.evaluate --config configs/default.yaml --model models/best/best_model
-```
----
-
 ## Observation space
 
 A flat vector. `n` is the number of arm joints — 7 for Franka, 6 for UR5e — so the total is **45** for the Franka.
@@ -172,9 +122,86 @@ r = exp(−‖p_ee − p_target‖ / pos_scale)        position closeness    ∈
 
 **Smoothness penalty (`β`):** The magnitude of the change in action between consecutive steps, discouraging jittery commands.
 
-**Scale.** A policy that tracks well sits near +1 per step (both closeness terms near 1, minus a small smoothness penalty); a poor one sits near 0. Watching the mean episode reward climb towards 299 (episode length) is a sign that training is working.
+**Scale.** A policy that tracks well sits near +1 per step (both closeness terms near 1, minus a small smoothness penalty); a poor one sits near 0. Watching the mean episode reward climb up is a sign that training is working.
 
 The three knobs (`beta`, `pos_scale`, `ori_scale`) are set under `reward` in `configs/default.yaml`.
+
+---
+
+## Setup
+
+The Docker image carries all dependencies. The robot model files are downloaded separately.
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/JacoboT27/3D-End-Effector-Tracking.git
+cd 3D-End-Effector-Tracking
+
+# 2. Run script to download robot model files (XML + meshes) into assets/
+bash scripts/download_assets.sh
+
+# 3. pull the image and train
+docker compose pull
+```
+**Lissajous Demo**
+```bash
+docker compose up train
+
+# alternatively, you can build the image and train
+docker compose up --build train
+
+# 4. Obtain training curves
+docker compose run --rm evaluate python -m agent.plot_training
+
+# 5. evaluate once training is done
+docker compose up evaluate
+
+# 6. watch the trained policy in the MuJoCo viewer
+xhost +local:                # once per session, grants the container the display
+docker compose up viewer
+```
+**CIrcular Helix Demo**
+```bash
+# train
+docker compose run --rm train python -m agent.train --config configs/default.yaml --trajectory circle
+
+# evaluate
+docker compose run --rm evaluate python -m agent.evaluate --config configs/default.yaml --trajectory circle
+
+# viewer  (run `xhost +local:` once on the host first)
+docker compose run --rm viewer python -m agent.visualize --config configs/default.yaml --trajectory circle
+
+# plot training curves
+docker compose run --rm evaluate python -m agent.plot_training --logdir logs --trajectory circle
+```
+
+**Warm-starting.** `train.py` accepts `--resume <model>` to continue training from an existing checkpoint instead of starting fresh — useful after a config change (e.g. a new curve placement), since the tracking skill transfers and only needs to adapt:
+
+```bash
+docker compose run --rm train python agent/train.py --config configs/default.yaml --resume models/best/best_model
+```
+
+**Workspace analysis.** The kinematic feasibility of the eval curve can be checked directly:
+
+```bash
+docker compose run --rm evaluate python agent/reachability_check.py
+docker compose run --rm evaluate python agent/manipulability_check.py
+```
+
+## Local setup (no Docker)
+
+```bash
+git clone https://github.com/JacoboT27/3D-End-Effector-Tracking.git
+cd 3D-End-Effector-Tracking
+bash scripts/download_assets.sh
+
+# install the CPU build of PyTorch first
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+
+python -m agent.train --config configs/default.yaml
+python -m agent.evaluate --config configs/default.yaml --model models/best/best_model
+```
 
 ---
 
@@ -225,18 +252,29 @@ Key parameters in `configs/default.yaml`:
 |---|---|---|
 | `env.robot` | `franka` | Robot model |
 | `env.control_freq` | `20` Hz | Agent control rate |
-| `env.episode_steps` | `500` | Hard cap; Lissajous episodes end earlier (see `lissajous_duration`) |
+| `env.episode_steps` | `500` | Hard cap; episodes normally end earlier when the curve finishes |
 | `env.max_delta_q` | `0.08` rad | Max joint-angle change per step |
-| `env.track_orientation` | `true` | Enable 6-DOF tracking |
-| `noise.ee_pos_std` | `0.005` m | End-effector position noise |
-| `trajectory.lissajous_duration` | `10.0` s | Duration of one curve / episode |
-| `trajectory.ori_ramp_duration` | `1.5` s | Startup ramp (position and orientation) onto the curve |
-| `trajectory.curve_center_offset` | `[-0.10, 0.0, -0.10]` m | Shifts every curve into the down-feasible workspace |
-| `trajectory.eval_amp_scale` | `0.90` | Scales the canonical eval curve |
-| `reward.pos_scale` | `0.10` m | Position-reward exponential decay scale |
+| `env.track_orientation` | `true` | Enable 6-DOF (position + orientation) tracking |
+| `noise.ee_pos_std` | `0.005` m | End-effector position observation noise |
+| `noise.ee_ori_std` | `0.01` rad | End-effector orientation observation noise |
+| `noise.joint_pos_std` | `0.005` rad | Joint-position observation noise |
+| `trajectory.lissajous_duration` | `15.0` s | Duration of one Lissajous episode |
+| `trajectory.ori_ramp_duration` | `1.5` s | Startup ramp onto the curve (Lissajous only; the circle starts on-curve and skips it) |
+| `trajectory.curve_center_offset` | `[-0.10, 0.0, -0.10]` m | Shifts the Lissajous curve into the down-feasible workspace |
+| `trajectory.eval_amp_scale` | `0.90` | Scales the canonical Lissajous eval curve |
+| `trajectory.circle_duration` | `10.0` s | Duration of one circle episode |
+| `trajectory.circle_radius` | `0.15` m | Circle radius (top-view); the loop is anchored through the home pose so it closes |
+| `trajectory.circle_height_amp` | `0.08` m | Vertical sine amplitude of the crown undulation |
+| `trajectory.circle_lobes` | `3` | Up/down crown lobes per revolution |
+| `trajectory.circle_loops` | `1` | Revolutions per episode |
+| `reward.pos_scale` | `0.05` m | Position-reward exponential decay scale |
 | `reward.ori_scale` | `0.5` rad | Orientation-reward exponential decay scale |
-| `reward.beta` | `0.01` | Smoothness penalty weight |
+| `reward.beta` | `0.06` | Smoothness penalty weight (raise for a smoother path, lower if tracking is sluggish) |
+| `training.total_timesteps` | `4_000_000` | Total training steps per run |
 | `training.n_envs` | `8` | Parallel environments |
-| `training.total_timesteps` | `2_000_000` | Total training steps per run |
+| `training.eval_freq` | `10_000` | Timesteps between evaluations |
+| `training.n_eval_episodes` | `10` | Episodes averaged per evaluation |
+| `training.early_stop_patience` | `60` | Evaluations with no new best before training stops |
+| `training.early_stop_min_evals` | `30` | Minimum evaluations before early-stopping can trigger |
 
 The TQC hyperparameters (learning rate `1e-4`, replay buffer `400k`, `gamma 0.98`, batch size `256`, etc.) are set directly in `agent/train.py` — they are **not** read from the config file.

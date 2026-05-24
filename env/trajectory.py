@@ -201,29 +201,43 @@ class TrajectoryGenerator:
             z = cz + A*sin(k*theta)
             theta = theta0 + omega*t
 
-        Training randomizes the radius, height, lobe count and start phase;
-        evaluation uses the fixed circle_* values from the config.
+        Training randomizes the radius, height and lobe count; evaluation
+        uses the fixed circle_* values from the config. The curve is anchored
+        so that it is a genuine CLOSED LOOP -- see the centring note below.
         """
         if randomize:
-            amp_lo, amp_hi = self.train_amp_range
-            R = self.radius * np.random.uniform(amp_lo, amp_hi)
-            A = self.radius * 0.4 * np.random.uniform(amp_lo, amp_hi)
+            # training circles bracket the evaluation circle. The radius is
+            # kept modest: because the curve is anchored through the EE's
+            # reset pose (see below), the rim spans 2*R from it, and a large
+            # R would push the far side into the robot base.
+            R = self.circle_radius * np.random.uniform(0.75, 1.05)
+            A = self.circle_height_amp * np.random.uniform(0.55, 1.10)
             k = int(np.random.randint(2, 6))            # 2-5 crown lobes
-            theta0 = np.random.uniform(0.0, 2.0 * np.pi)
         else:
             R = self.circle_radius
             A = self.circle_height_amp
             k = self.circle_lobes
-            theta0 = 0.0
 
-        omega = 2.0 * np.pi * self.circle_loops / self.circle_duration
+        # theta0 is fixed at 0, so the t=0 rim point is centre + [R, 0, 0].
+        theta0 = 0.0
+        # Close the loop exactly on the discrete step grid. The last target
+        # the episode renders sits at t = circle_duration - dt (the final
+        # step advances the clock to circle_duration, which ends the episode),
+        # so completing the loops by then makes circle(last) == circle(0)
+        # with no discretisation gap.
+        omega = (2.0 * np.pi * self.circle_loops
+                 / (self.circle_duration - self.dt))
         self.circle_params = {
             "R": R, "A": A, "k": k, "omega": omega, "theta0": theta0,
         }
-        # centre the circle at (anchor + curve_center_offset); the startup
-        # ramp eases the target from the EE's reset pose onto the rim, so
-        # there is no positional jump at episode start
-        self.circle_center = self.anchor + self.curve_center_offset
+        # Anchor the circle THROUGH the EE's reset pose. With theta0 = 0 the
+        # t=0 rim point is centre + [R, 0, 0], so centring at anchor - [R,0,0]
+        # makes circle(0) == anchor exactly. Consequences:
+        #   * the EE starts already on the rim -> no startup ramp is needed
+        #     (the ramp is skipped for the circle in _startup_position_ramp),
+        #   * the curve runs a whole number of loops, so circle(T) == circle(0)
+        #     -- the trajectory is a genuine closed loop with no tail.
+        self.circle_center = self.anchor - np.array([R, 0.0, 0.0])
         self.total_duration = self.circle_duration
 
     def _circle_pos(self, t):
@@ -296,8 +310,11 @@ class TrajectoryGenerator:
         closes it so every episode still starts exactly on-target. The blend
         is C1-smooth at the hand-off: when the ramp ends the blended velocity
         equals the curve velocity, so there is no jolt onto the curve."""
+        # The circle is anchored so that circle(0) is the EE's reset pose, so
+        # it already starts on-target; ramping it would distort -- and open --
+        # the start of the loop. Lissajous/waypoint curves still get the ramp.
         ramp = self.ori_ramp_duration
-        if ramp <= 0.0 or t >= ramp:
+        if self.traj_type == "circle" or ramp <= 0.0 or t >= ramp:
             return pos, vel
         s = self._min_jerk(t / ramp)
         s_dot = self._min_jerk_dot(t / ramp) / ramp

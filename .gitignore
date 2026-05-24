@@ -12,4 +12,5 @@ models/*
 !models/best/
 models/best/*
 !models/best/best_model.zip
+!models/best/best_model_circular.zip
 logs/

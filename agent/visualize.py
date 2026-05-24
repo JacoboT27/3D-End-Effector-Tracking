@@ -1,14 +1,17 @@
 """
 Visualize a trained policy in an interactive MuJoCo viewer window.
 
-Runs the SAC policy on the Lissajous evaluation trajectory and opens the
-MuJoCo viewer. A red sphere marks the current target; an amber trail shows
-the target path and a blue trail shows the end-effector path.
+Runs the trained TQC policy on an evaluation trajectory (Lissajous or circle)
+and opens the MuJoCo viewer. A red sphere marks the current target; an amber
+trail shows the target path and a blue trail shows the end-effector path.
 
 Designed to run from the Docker `viewer` service (Linux + X11 forwarding):
 
     xhost +local:                  # once, on the host
     docker compose up --build viewer
+
+    # or, to view the circle policy on the circle:
+    docker compose run --rm viewer python -m agent.visualize --trajectory circle
 
 Press Esc or close the window to quit.
 """
@@ -21,7 +24,7 @@ import numpy as np
 import yaml
 import mujoco
 import mujoco.viewer
-from stable_baselines3 import SAC
+from sb3_contrib import TQC
 
 from env.tracking_env import EETrackingEnv
 
@@ -49,19 +52,47 @@ def add_sphere(scn, pos, radius, rgba):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
-    parser.add_argument("--model", default="models/best/best_model")
+    parser.add_argument(
+        "--trajectory", type=str, default=None,
+        choices=["lissajous", "circle"],
+        help="curve family to view (overrides eval_type in the config)",
+    )
+    parser.add_argument(
+        "--model", type=str, default=None,
+        help="path to the model; defaults to models/best/best_model, or "
+             "models/best/best_model_circular when --trajectory circle",
+    )
     parser.add_argument("--speed", type=float, default=1.0,
                         help="playback speed multiplier (1.0 = real time)")
     parser.add_argument("--trail", type=int, default=120,
                         help="number of points kept in each path trail")
     args = parser.parse_args()
 
+    # resolve the model path the same way evaluate.py does, so the viewer
+    # loads the model that matches the trajectory it is about to draw
+    model_path = args.model
+    if model_path is None:
+        model_path = ("models/best/best_model_circular"
+                      if args.trajectory == "circle"
+                      else "models/best/best_model")
+
     config = load_config(args.config)
+
+    # optional curve-family override (--trajectory): without this the viewer
+    # always builds the config's eval_type curve, so a circle policy would be
+    # shown tracking a Lissajous
+    if args.trajectory is not None:
+        config["trajectory"]["eval_type"] = args.trajectory
+
     dt = 1.0 / config["env"]["control_freq"]
 
-    # eval_mode=True selects the Lissajous trajectory
+    # eval_mode=True selects the evaluation trajectory (eval_type)
     env = EETrackingEnv(config, eval_mode=True)
-    policy = SAC.load(args.model)
+
+    # NOTE: the agent is TQC (sb3-contrib). Loading a TQC checkpoint with
+    # stable_baselines3.SAC is incorrect -- it must be loaded with TQC.
+    policy = TQC.load(model_path)
+    print(f"Loaded model from {model_path}")
 
     obs, _ = env.reset()
 
