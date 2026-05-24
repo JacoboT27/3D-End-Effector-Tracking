@@ -18,27 +18,34 @@ from env.tracking_env import EETrackingEnv
 class NamedEvalCallback(EvalCallback):
     """EvalCallback that saves the best model under a chosen filename.
 
-    SB3's EvalCallback always names the best model 'best_model.zip', so a
-    second trajectory demo would overwrite the first. This subclass renames
-    the file to `best_model_name` after each new best is saved, letting e.g.
-    best_model.zip and best_model_circular.zip coexist in models/best/.
+    SB3's EvalCallback always writes 'best_model.zip'. To keep one model per
+    trajectory in the same folder, this subclass *disables* the parent's own
+    best-model save (so it never touches 'best_model.zip') and saves the
+    model itself under `best_model_name`. That way best_model.zip (lissajous)
+    and best_model_circular.zip (circle) coexist in models/best/ and a run
+    never overwrites the other trajectory's model.
     """
 
     def __init__(self, *args, best_model_name="best_model", **kwargs):
-        super().__init__(*args, **kwargs)
+        # Intercept the save directory and stop the PARENT from saving: if it
+        # wrote 'best_model.zip' it would clobber the other trajectory's
+        # model before this subclass could do anything about it.
+        self.best_model_dir = kwargs.pop("best_model_save_path", None)
         self.best_model_name = best_model_name
+        kwargs["best_model_save_path"] = None
+        super().__init__(*args, **kwargs)
 
-    def _on_step(self):
+    def _on_step(self) -> bool:
         prev_best = self.best_mean_reward
         keep_going = super()._on_step()
-        if (self.best_model_save_path is not None
-                and self.best_mean_reward > prev_best
-                and self.best_model_name != "best_model"):
-            src = os.path.join(self.best_model_save_path, "best_model.zip")
-            dst = os.path.join(self.best_model_save_path,
-                               f"{self.best_model_name}.zip")
-            if os.path.exists(src):
-                os.replace(src, dst)
+        # The parent ran the evaluation and updated best_mean_reward but did
+        # NOT save (its path is None). Save under our own name on a new best.
+        if self.best_model_dir is not None and self.best_mean_reward > prev_best:
+            os.makedirs(self.best_model_dir, exist_ok=True)
+            path = os.path.join(self.best_model_dir, self.best_model_name)
+            self.model.save(path)
+            if self.verbose >= 1:
+                print(f"New best model saved to {path}.zip")
         return keep_going
 
 
