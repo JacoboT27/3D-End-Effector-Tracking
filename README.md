@@ -15,8 +15,8 @@ A TQC agent observes the noisy state of the arm and the (clean) state of the tar
 - **Simulator** — MuJoCo 3.x, Franka Emika Panda 7-DOF arm, wrapped as a Gymnasium environment.
 - **Control** — joint position actuators driven by delta-angle commands.
 - **Agent** — TQC (sb3-contrib): off-policy, distributional actor-critic, with a 400k-transition replay buffer.
-- **Training targets** —  Lissajous curve.
-- **Evaluation target** — a fixed Lissajous curve, so the eval score is a stable, comparable benchmark across runs.
+- **Training targets** —  Random curves of the same type (Lissajous or circular).
+- **Evaluation target** — a fixed Lissajous or Circular Helix curve, so the eval score is a stable, comparable benchmark across runs.
 - **Uncertainty source** — Gaussian noise on the observed end-effector pose and joint angles.
 
 ---
@@ -24,14 +24,19 @@ A TQC agent observes the noisy state of the arm and the (clean) state of the tar
 ## Results
 
 **Demo of the final policy following the evaluation trajectory**
-![Project Demo](examples/demo.gif)
+| Circular Helix| Lissajous |
+|---|---|
+|![Project Demo](examples/lissajous_demo.gif) | ![Project Demo](examples/lissajous_demo.gif) |
 
+**Circular Helix Training**
+
+**Lissajous Training**
 Training lasted for ~4M timesteps, until the evaluation reward plateaud. This is confirmed by the following plots. Training reward kept steadily climbing, and the actor-critic losses show a good behaviour. 
-![input](examples/training.png)
+![input](examples/lissajous_training.png)
 
 The best policy obtained from training was evaluated using a 3D Lissajous curve, to demstrate full capabilities of the agent. 
 
-![input](examples/evaluation.png)
+![input](examples/lissajous_evaluation.png)
 
 Final result shows  a mean error of 1cm and 0.08 rad across the trajectory. Main source of error was right after the crossing in the middle fo the trajectory. At that specific point, the agent has trouble differentiating which way it is going to, and where it is coming from, so it separates from the target. A few steps later, it converges again. 
 
@@ -48,11 +53,11 @@ The agent outputs **delta joint angles** (Δq) — small per-joint changes, capp
 
 TQC is an off-policy actor-critic algorithm. It stores every transition in a replay buffer and reuses it for many gradient updates, which is sample-efficient, making it ideal when the simulator runs on CPU with 8 parallel environments. TQC represents each critic as a *distribution* over returns and truncates the top quantiles when forming the target, which controls the value-overestimation bias.
 
-### Lissajous trajectories, randomized for training
+### Target trajectories, randomized for training
 
-**Training** re-samples a fresh **randomized Lissajous curve** every episode — random per-axis amplitude, frequency and phase. Re-randomizing every episode forces the agent to learn tracking as a genuine skill rather than memorize one path.
+**Training** re-samples a **randomized curve** every episode — random per-axis amplitude, frequency and phase. Re-randomizing every episode forces the agent to learn tracking as a genuine skill rather than memorize one path.
 
-**Evaluation** uses a single fixed **canonical Lissajous curve**. Because training already covers the same family of motion (and the same speeds), the eval curve is in-distribution, and the eval score is a stable, comparable benchmark across runs rather than a noisy out-of-distribution probe.
+**Evaluation** uses a single fixed **curve**. Because training already covers the same family of motion (and the same speeds), the eval curve is in-distribution, and the eval score is a stable, comparable benchmark across runs rather than a noisy out-of-distribution probe.
 
 ### Orientation: 6D representation and geodesic error
 
