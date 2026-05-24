@@ -1,12 +1,15 @@
 # robot model files — downloaded via scripts/download_assets.sh
 assets/
 
-# training outputs
-models/
-logs/
-
 # python
 __pycache__/
 *.pyc
 *.egg-info/
 .venv/
+
+# training outputs — keep only the shipped best model
+models/*
+!models/best/
+models/best/*
+!models/best/best_model.zip
+logs/
