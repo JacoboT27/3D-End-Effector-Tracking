@@ -17,13 +17,15 @@ class TrajectoryGenerator:
     the per-episode randomization keeps it a genuine tracking skill rather
     than a memorized path.
 
-    Both train and eval curves are anchored at the end-effector's position
-    at reset (the curve's t=0 point is shifted onto the anchor), so every
-    episode starts on-target with no positional startup gap.
+    Both train and eval curves are placed relative to the end-effector's
+    position at reset, shifted by `curve_center_offset` (which relocates the
+    curve into the workspace region where the EE can actually point down).
 
-    The orientation target ramps smoothly from the EE's actual orientation
-    at reset to a fixed downward pose over `ori_ramp_duration` seconds, then
-    holds downward. This removes the orientation startup transient.
+    The position AND orientation targets ramp smoothly onto the curve over
+    `ori_ramp_duration` seconds at the start of each episode -- position from
+    the EE's reset location, orientation from its reset pose to the fixed
+    downward pose. This keeps every episode starting on-target with no
+    startup transient, even when the curve is offset from the reset pose.
 
     Every step returns:
         (position, linear_velocity, orientation_matrix, angular_velocity)
@@ -48,6 +50,13 @@ class TrajectoryGenerator:
         # per-axis randomization ranges for *training* curves
         self.train_amp_range = traj_cfg.get("train_amp_range", [0.3, 1.0])
         self.train_freq_range = traj_cfg.get("train_freq_range", [0.5, 3.0])
+
+        # curve placement: shift every curve (train + eval) into the region
+        # where the EE can point straight down; eval_amp_scale additionally
+        # shrinks the canonical eval curve. Defaults reproduce old behaviour.
+        self.curve_center_offset = np.array(
+            traj_cfg.get("curve_center_offset", [0.0, 0.0, 0.0]), dtype=float)
+        self.eval_amp_scale = float(traj_cfg.get("eval_amp_scale", 1.0))
 
         # fixed downward end-effector orientation (the steady-state target)
         self.down_orientation = Rotation.from_euler("xyz", [np.pi, 0, 0]).as_matrix()
@@ -96,6 +105,7 @@ class TrajectoryGenerator:
     def step(self):
         """Advance time by one control step and return the current target."""
         pos, lin_vel = self._get_position(self.t)
+        pos, lin_vel = self._startup_position_ramp(self.t, pos, lin_vel)
         rot_mat, ang_vel = self._get_orientation(self.t)
         self.t += self.dt
         return pos, lin_vel, rot_mat, ang_vel
@@ -116,8 +126,9 @@ class TrajectoryGenerator:
             phases = np.random.uniform(0.0, 2.0 * np.pi, size=3)
         else:
             # canonical evaluation curve -- fixed so the eval score stays
-            # comparable across runs (identical to the original eval curve)
-            amps = self.radius * self._LIS_AMP
+            # comparable across runs (identical shape to the original eval
+            # curve, scaled by eval_amp_scale)
+            amps = self.radius * self._LIS_AMP * self.eval_amp_scale
             freqs = np.array([1.0, 2.0, 3.0])
             phases = np.zeros(3)
 
@@ -126,10 +137,11 @@ class TrajectoryGenerator:
             "wx": freqs[0], "wy": freqs[1], "wz": freqs[2],
             "px": phases[0], "py": phases[1], "pz": phases[2],
         }
-        # shift the centre so the curve's t=0 point lands exactly on the
-        # anchor -- preserves "start on-target" even with random phases
+        # place the curve at (anchor + curve_center_offset); the t=0 point
+        # lands there, and the startup ramp eases the target onto it from the
+        # EE's reset pose so there is still no positional jump at episode start
         start_offset = amps * np.sin(phases)
-        self.lis_center = self.anchor - start_offset
+        self.lis_center = self.anchor + self.curve_center_offset - start_offset
         self.total_duration = self.lissajous_duration
 
     def _lissajous_pos(self, t):
@@ -189,6 +201,22 @@ class TrajectoryGenerator:
         if self.traj_type == "lissajous":
             return self._lissajous_pos(t)
         return self._waypoint_pos(t)
+
+    def _startup_position_ramp(self, t, pos, vel):
+        """Ease the position target from the EE's reset position (the anchor)
+        onto the curve over the startup ramp -- the position counterpart of
+        the orientation ramp. Relocating the curve centre opens a gap between
+        the EE's reset pose and the curve's t=0 point; this min-jerk blend
+        closes it so every episode still starts exactly on-target. The blend
+        is C1-smooth at the hand-off: when the ramp ends the blended velocity
+        equals the curve velocity, so there is no jolt onto the curve."""
+        ramp = self.ori_ramp_duration
+        if ramp <= 0.0 or t >= ramp:
+            return pos, vel
+        s = self._min_jerk(t / ramp)
+        s_dot = self._min_jerk_dot(t / ramp) / ramp
+        delta = pos - self.anchor
+        return self.anchor + s * delta, s_dot * delta + s * vel
 
     # ------------------------------------------------------------------
     # Orientation

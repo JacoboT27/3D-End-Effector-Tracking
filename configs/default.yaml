@@ -20,7 +20,8 @@ trajectory:
   ori_ramp_duration: 1.5           # seconds: ramp orientation start-pose -> downward
   train_amp_range: [0.3, 1.0]      # per-axis amplitude, as a fraction of workspace_radius
   train_freq_range: [0.5, 3.0]     # per-axis angular frequency, rad/s
-  # --- legacy waypoint mode (only used if train_type == "waypoint") ---
+  curve_center_offset: [-0.10, 0.0, -0.10]   # meters [dx, dy, dz], applied to all curves
+  eval_amp_scale: 0.90                       # shrink the canonical eval curve to 90%
   n_waypoints: 6
   interp_duration: 2.0
 
@@ -30,14 +31,9 @@ reward:
   ori_scale: 0.5                   # rad — orientation reward exp scale
 
 training:
-  total_timesteps: 2_000_000
+  total_timesteps: 4_000_000
   n_envs: 8                        # parallel environments
   save_freq: 50_000
   log_interval: 1000
   log_dir: "logs/"
   model_dir: "models/"
-  # NOTE: the TQC hyperparameters (learning_rate, buffer_size, gamma,
-  # batch_size, tau, learning_starts, gradient_steps) are set directly in
-  # agent/train.py — they are NOT read from this file. The values there
-  # (lr 1e-4, buffer 400k, gamma 0.98) are the ones that produced the
-  # stable working run; editing them here would have no effect.

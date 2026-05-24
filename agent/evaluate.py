@@ -21,7 +21,6 @@ def evaluate(config_path: str, model_path: str, n_episodes: int = 3):
     env = EETrackingEnv(config, eval_mode=True)
 
     # NOTE: the agent is TQC (sb3-contrib), so it must be loaded with TQC.
-    # Loading a TQC checkpoint with stable_baselines3.SAC is incorrect.
     model = TQC.load(model_path, env=env)
     print(f"Loaded model from {model_path}")
 
