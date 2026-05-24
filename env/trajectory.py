@@ -58,7 +58,11 @@ class TrajectoryGenerator:
             traj_cfg.get("curve_center_offset", [0.0, 0.0, 0.0]), dtype=float)
         self.eval_amp_scale = float(traj_cfg.get("eval_amp_scale", 1.0))
 
-        # fixed downward end-effector orientation (the steady-state target)
+        # Downward end-effector target. "Pointing down" only fixes the EE
+        # z-axis; the yaw is a free choice. This default is a fallback --
+        # reset() recomputes it from the reset pose so its yaw matches the
+        # home pose (see _force_z_down), which leaves the orientation ramp
+        # nothing to slew.
         self.down_orientation = Rotation.from_euler("xyz", [np.pi, 0, 0]).as_matrix()
 
         # waypoint sampling radius -- only used in legacy "waypoint" mode
@@ -94,6 +98,12 @@ class TrajectoryGenerator:
                        if start_pos is not None else self.center.copy())
         if start_rot is not None:
             self.start_orientation = np.array(start_rot, dtype=float)
+            # Match the downward target's yaw to the reset pose. The reset
+            # pose already points straight down, so this makes it on-target
+            # in orientation from t=0 and the orientation ramp becomes a
+            # no-op -- without it the ramp must slew 90 deg of yaw, faster
+            # than the joints can move, producing a large startup error.
+            self.down_orientation = self._force_z_down(self.start_orientation)
 
         if ttype == "waypoint":
             self._init_waypoints()
@@ -255,6 +265,23 @@ class TrajectoryGenerator:
         """Spherical linear interpolation between two rotations."""
         rotvec = (r1 * r0.inv()).as_rotvec()
         return Rotation.from_rotvec(t * rotvec) * r0
+
+    @staticmethod
+    def _force_z_down(R):
+        """Return the orientation closest to R whose z-axis points straight
+        down, i.e. R rotated by the minimal tilt that verticalizes its
+        z-axis. For a pose already pointing down this returns R unchanged
+        (it just keeps R's yaw). Used so the downward target matches the
+        EE's reset pose, leaving the orientation startup ramp nothing to do."""
+        z = np.asarray(R)[:, 2]
+        target = np.array([0.0, 0.0, -1.0])
+        axis = np.cross(z, target)
+        s = np.linalg.norm(axis)
+        if s < 1e-9:                       # already vertical (up or down)
+            return np.array(R, dtype=float)
+        angle = np.arctan2(s, float(np.dot(z, target)))
+        align = Rotation.from_rotvec(axis / s * angle).as_matrix()
+        return align @ np.asarray(R, dtype=float)
 
     # ------------------------------------------------------------------
     # Minimum-jerk profile helpers
