@@ -28,26 +28,29 @@ A TQC agent observes the noisy state of the arm and the (clean) state of the tar
 |---|---|
 |![Project Demo](examples/helix_controller.gif) | ![Project Demo](examples/lissajous_demo.gif) |
 
+Both policies were trained and evaluated with substantial observation noise. σ = 0.005 m on the measured end-effector position and σ = 0.01 rad on its orientation. For a manipulator this is on the pessimistic side. 
+A real Franka's proprioception is tighter. This noise sets a floor on achievable accuracy. Every noisy observation causes a corrective action. The smoothness penalty `β` mitigates this by penalising abrupt changes in action. This makes the path smoother, however, larger `β` buys a smoother trajectory at the cost of a slightly looser track. In other words, `β` controls the trading of **precision against smoothness**.
+
 **Circular Helix Training**
 
 Training lasted for ~2.8M timesteps, until a plateau was detected on the evaluation reward curve, meaning no further training was required. Plot shows also a plateau on the reward curve. 
 ![input](examples/helix_training.png)
 
-The best policy obtained from training was evaluated using a 3D circular helix curve, to demstrate full capabilities of the agent. 
+The best policy obtained from training was evaluated using a 3D circular helix curve, to demonstrate full capabilities of the agent. 
 ![input](examples/helix_evaluation.png)
 
-Final results show a mean error of 6mm in position tracking, and 0.057rad in orientation tracking. 
+Final results show a mean error of 6.7mm in position tracking, and 0.057rad in orientation tracking. 
 
 **Lissajous Training**
 
 Training lasted for ~4M timesteps, until the evaluation reward plateaued. This is confirmed by the following plots. Training reward kept steadily climbing, and the actor-critic losses show a good behaviour. 
 ![input](examples/lissajous_training.png)
 
-The best policy obtained from training was evaluated using a 3D Lissajous curve, to demstrate full capabilities of the agent. 
+The best policy obtained from training was evaluated using a 3D Lissajous curve, to demonstrate full capabilities of the agent. 
 
 ![input](examples/lissajous_evaluation.png)
 
-Final result shows  a mean error of 1cm and 0.08 rad across the trajectory. Main source of error was right after the crossing in the middle fo the trajectory. At that specific point, the agent has trouble differentiating which way it is going to, and where it is coming from, so it separates from the target. A few steps later, it converges again. 
+Final result shows  a mean error of 1cm and 0.08 rad across the trajectory. Main source of error was right after the crossing in the middle of the trajectory. At that specific point, the agent has trouble differentiating which way it is going to, and where it is coming from, so it separates from the target. A few steps later, it converges again. 
 
 
 ---
@@ -122,7 +125,7 @@ r = exp(−‖p_ee − p_target‖ / pos_scale)        position closeness    ∈
 
 **Smoothness penalty (`β`):** The magnitude of the change in action between consecutive steps, discouraging jittery commands.
 
-**Scale.** A policy that tracks well sits near +1 per step (both closeness terms near 1, minus a small smoothness penalty); a poor one sits near 0. Watching the mean episode reward climb up is a sign that training is working.
+**Scale.** A policy that tracks well approaches +1 per step (both closeness terms near 1, minus a small smoothness penalty); a poor one sits near 0. Watching the mean episode reward climb up is a sign that training is working.
 
 The three knobs (`beta`, `pos_scale`, `ori_scale`) are set under `reward` in `configs/default.yaml`.
 
@@ -160,7 +163,7 @@ docker compose up evaluate
 xhost +local:                # once per session, grants the container the display
 docker compose up viewer
 ```
-**CIrcular Helix Demo**
+**Circular Helix Demo**
 ```bash
 # train
 docker compose run --rm train python -m agent.train --config configs/default.yaml --trajectory circle
@@ -214,7 +217,7 @@ python -m agent.evaluate --config configs/default.yaml --model models/best/best_
 │   └── ur5e/                     # UR5e XML + meshes
 ├── env/
 │   ├── tracking_env.py           # Gymnasium environment — delta-q control, noisy obs, product reward
-│   ├── trajectory.py             # randomized Lissajous (train) + fixed Lissajous (eval), startup ramps
+│   ├── trajectory.py             # Lissajous + Helix trajectory generator
 │   ├── noise.py                  # Gaussian observation noise
 │   └── utils.py                  # SO(3) utilities, 6D rotation representation
 ├── agent/
